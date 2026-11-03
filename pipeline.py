@@ -9,6 +9,9 @@ Scanned PDF -> TurboOCR -> cleaned Markdown -> EPUB3, driven by <book_dir>/book.
   python3 pipeline.py <book_dir> --init             # write a starter book.json
   python3 pipeline.py <book_dir> --steps build,verify   # md-source books: pandoc only
 
+Finished EPUB: book.json "finish" {...} (colophon.html / license.html in the book folder, if present, replace the generated pages) switches build to the MasasilaM-style
+edition (title page, colophon, nested TOC, poem/figure markup, templates/masasilam.css).
+
 Source of truth: book.json "source" = "ocr" (default; book.md is generated from
 ocr/md pages) or "book.md" (book.md is hand-edited and is never regenerated;
 the build step only runs pandoc on it, and the ocr/images steps are skipped).
@@ -411,7 +414,194 @@ def build(bd, cfg, n):
     return build_epub(bd, cfg)
 
 
+
+# ------------------------------------------------- finished-EPUB (MasasilaM style)
+# Structure and styling follow the MasasilaM reference edition
+# ("Menyambut Kongres Kebudayaan", masasilam.com): title page, colophon,
+# nested TOC, div.poem verse, div.image-with-caption, full OPF metadata.
+# Enabled by a "finish" object in book.json; book.md itself is never modified.
+def _he(t):
+    return html.escape(str(t), quote=True)
+
+
+def finish_colophon(cfg, fin):
+    title = cfg["title"]
+    credits = fin.get("credits", [])
+    rows = []
+    for label, name in credits:
+        rows += [f'<p class="credit-label">{_he(label)}</p>', f'<p class="credit-name">{_he(name)}</p>']
+    box = [f'<p>{_he(x)}</p>' for x in fin.get("rights_lines", [])]
+    if cfg.get("source_url"):
+        box.append(f'<p>Sumber pindaian: <a href="{_he(cfg["source_url"])}"><em>'
+                   f'{_he(fin.get("source_label", cfg["source_url"]))}</em></a></p>')
+    out = ['<p class="colophon-title"><strong>%s</strong></p>' % _he(title.upper()),
+           '<p class="byline">oleh</p>',
+           '<p class="author-name"><strong>%s</strong></p>' % _he(cfg.get("author", "").upper()),
+           '<hr class="credit-divider"/>', *rows,
+           '<div class="info-box copyright-box">', *box, '</div>']
+    if fin.get("contact"):
+        out.append('<p class="contribution-note">Kesalahan ketik dan koreksi dapat dikirimkan ke '
+                   f'<a href="mailto:{_he(fin["contact"])}">{_he(fin["contact"])}</a>.</p>')
+    out.append('<p class="colophon-footer">%s</p>' % fin.get(
+        "attribution_html",
+        'Tata letak, gaya, dan kolofon mengikuti edisi <a href="https://masasilam.com">'
+        '<em>MasasilaM</em></a>.'))
+    return "\n".join(out)
+
+
+LICENSE_DEFAULT = {
+    "name": "CC BY-SA 4.0",
+    "full_name": "Creative Commons Atribusi-BerbagiSerupa 4.0 Internasional",
+    "url": "https://creativecommons.org/licenses/by-sa/4.0/deed.id",
+}
+
+
+def license_info(fin):
+    lic = fin.get("license", True)
+    if lic is False:
+        return None
+    return {**LICENSE_DEFAULT, **(lic if isinstance(lic, dict) else {})}
+
+
+def finish_license(cfg, fin):
+    """Back-matter license page, modelled on the MasasilaM edition of 'Tahun yang Tak Pernah
+    Berakhir' (in-copyright material): the page is titled with the license name, the full name
+    is a subtitle, and only the digital-edition work is licensed; rights in the original
+    material are not claimed. Returns the HTML that follows the h1."""
+    L = license_info(fin)
+    n, full, url = _he(L["name"]), _he(L["full_name"]), _he(L["url"])
+    contact = fin.get("contact")
+    who = (f'<a href="mailto:{_he(contact)}"><i>{_he(contact)}</i></a>' if contact
+           else "pengelola edisi digital ini")
+    return "\n".join([
+        f'<div class="subtitle">\n{full}\n</div>',
+        f'<p>Halaman hak cipta biasanya memberi tahu apa yang tidak boleh dilakukan. Sebaliknya, '
+        f'pernyataan <i>{n}</i> ini hadir untuk membuka kemungkinan.</p>',
+        '<p><i>E-book</i> ini merupakan hasil digitalisasi dan penyuntingan, tanpa klaim kepemilikan '
+        'atas materi aslinya.</p>',
+        f'<p>Seluruh kontribusi dalam edisi ini\u2014termasuk digitalisasi, penyuntingan, atau penataan '
+        f'tipografi\u2014dilepaskan di bawah lisensi <a href="{url}"><i>{full} ({n})</i></a>.</p>',
+        f'<p>Pemegang hak cipta atas materi dalam <i>e-book</i> ini yang keberatan atas penggunaannya '
+        f'dipersilakan menghubungi {who} untuk peninjauan lebih lanjut.</p>',
+        '<p>Upaya ini dilakukan semata-mata demi memperkaya khazanah literasi, mendukung pelestarian, '
+        'dan membuka akses seluas-luasnya agar isi dalam <i>e-book</i> ini dapat dibaca, dinikmati, '
+        'sekaligus dipelajari.</p>',
+    ])
+
+
+def finish_markdown(md, cfg, fin, colophon_html=None, license_html=None):
+    """book.md -> pandoc input for the finished EPUB (title page, colophon, poems, figures)."""
+    paras = md.split("\n\n")
+    out, i = [], 0
+    is_poem = lambda p: (p.startswith("*") and p.endswith("*") and "\\\n" in p and "**" not in p)
+    while i < len(paras):
+        p = paras[i]
+        if is_poem(p):
+            stanzas = []
+            while i < len(paras) and is_poem(paras[i]):
+                lines = [l.strip().rstrip("\\").strip("*").strip() for l in paras[i].split("\n")]
+                stanzas.append("<div>" + " ".join(f"<span>{_he(l)}</span>" for l in lines if l) + "</div>")
+                i += 1
+            out.append('```{=html}\n<div class="poem">\n' + "\n".join(stanzas) + "\n</div>\n```")
+            continue
+        if re.fullmatch(r"!\[\]\(epub_assets/[^)]+\)", p):
+            out.append("::: image-with-caption\n" + p + "\n:::")
+        else:
+            out.append(p)
+        i += 1
+    body = "\n\n".join(out)
+    title = cfg["title"]
+    head = [f'# {title} {{.titlepage .unlisted epub:type="titlepage"}}',
+            f'### {cfg.get("author", "")} {{.unlisted}}',
+            '# Kolofon {.colophon epub:type="colophon"}',
+            "```{=html}\n" + (colophon_html if colophon_html is not None else finish_colophon(cfg, fin)) + "\n```"]
+    tail = ""
+    L = license_info(fin)
+    if L:
+        lic = license_html if license_html is not None else finish_license(cfg, fin)
+        tail = (f'\n\n# {L["name"]} {{.uncopyright epub:type="uncopyright"}}\n\n```{{=html}}\n' + lic + "\n```\n")
+    return "\n\n".join(head) + "\n\n" + body + tail
+
+
+def finish_metadata(cfg, fin):
+    meta = {"lang": cfg["lang"], "toc-title": fin.get("toc_title", "Daftar Isi")}
+    meta["title"] = cfg["title"]
+    if cfg.get("author"):
+        meta["creator"] = [{"role": "aut", "text": cfg["author"]}]
+    contrib = [{"role": r, "text": n} for r, n in fin.get("contributors", [])]
+    if contrib:
+        meta["contributor"] = contrib
+    pub = fin.get("publisher") or cfg.get("publisher")
+    if pub:
+        meta["publisher"] = pub
+    if fin.get("subjects") or cfg.get("subject"):
+        meta["subject"] = fin.get("subjects") or [cfg["subject"]]
+    if cfg.get("description") or fin.get("description"):
+        meta["description"] = fin.get("description") or cfg["description"]
+    L = license_info(fin)
+    if fin.get("rights") or L:
+        meta["rights"] = fin.get("rights") or L["name"]
+    if cfg.get("source_url"):
+        meta["source"] = cfg["source_url"]
+    return meta
+
+
+def _fix_body_types(epub):
+    """pandoc files colophon under backmatter and uncopyright under bodymatter; the MasasilaM
+    reference keeps the colophon in frontmatter and the uncopyright page in backmatter."""
+    src, tmp = epub, epub + ".tmp"
+    with zipfile.ZipFile(src) as zi, zipfile.ZipFile(tmp, "w") as zo:
+        for item in zi.infolist():
+            data = zi.read(item.filename)
+            if item.filename.endswith(".xhtml"):
+                if b'epub:type="colophon"' in data:
+                    data = data.replace(b'<body epub:type="backmatter">', b'<body epub:type="frontmatter">', 1)
+                elif b'epub:type="uncopyright"' in data:
+                    data = data.replace(b'<body epub:type="bodymatter">', b'<body epub:type="backmatter">', 1)
+            zo.writestr(item, data, compress_type=item.compress_type)
+    os.replace(tmp, src)
+
+
+def build_epub_finished(bd, cfg, fin):
+    md = open(os.path.join(bd, "book.md"), encoding="utf-8").read()
+    tmp_md = os.path.join(bd, ".book.finish.md")
+    tmp_meta = os.path.join(bd, ".book.finish.json")
+    css = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "masasilam.css")
+    if not os.path.exists(css):
+        sys.exit(f"finish: stylesheet missing: {css}")
+    col_p = os.path.join(bd, fin.get("colophon_file", "colophon.html"))
+    col = None
+    if os.path.exists(col_p):
+        col = open(col_p, encoding="utf-8").read().strip()
+        print(f"colophon: using hand-edited {os.path.basename(col_p)}")
+    lic_p = os.path.join(bd, fin.get("license_file", "license.html"))
+    lic = None
+    if os.path.exists(lic_p):
+        lic = open(lic_p, encoding="utf-8").read().strip()
+        print(f"license: using hand-edited {os.path.basename(lic_p)}")
+    open(tmp_md, "w", encoding="utf-8").write(finish_markdown(md, cfg, fin, col, lic))
+    json.dump(finish_metadata(cfg, fin), open(tmp_meta, "w", encoding="utf-8"), ensure_ascii=False)
+    epub = os.path.join(bd, cfg["epub_name"])
+    cmd = ["pandoc", ".book.finish.md", "-o", epub, "--from", "markdown+pipe_tables-implicit_figures",
+           "--to", "epub3", "--epub-cover-image=epub_assets/cover.jpg",
+           "--metadata-file", ".book.finish.json", "--css", css,
+           "--split-level=1", "--resource-path=.", "--toc", "--toc-depth=2"]
+    try:
+        r = subprocess.run(cmd, cwd=bd, capture_output=True, text=True)
+    finally:
+        for f in (tmp_md, tmp_meta):
+            if os.path.exists(f):
+                os.remove(f)
+    if r.returncode != 0 or "PandocResourceNotFound" in r.stderr:
+        print("pandoc problems:\n" + r.stderr[:3000])
+        sys.exit("build failed")
+    _fix_body_types(epub)
+    print(f"EPUB (finished, MasasilaM style): {epub} ({os.path.getsize(epub) // 1024} KB)")
+
+
 def build_epub(bd, cfg):
+    if cfg.get("finish"):
+        return build_epub_finished(bd, cfg, cfg["finish"])
     epub = os.path.join(bd, cfg["epub_name"])
     cmd = ["pandoc", "book.md", "-o", epub, "--from", "markdown+pipe_tables", "--to", "epub3",
            "--epub-cover-image=epub_assets/cover.jpg",

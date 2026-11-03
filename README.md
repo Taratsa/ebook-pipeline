@@ -59,3 +59,49 @@ and compare book.md with the stored copy.
 - Requires one page OCR request per PDF page (sent as single-page PDFs, avoids the 100 MB body limit).
 - Chapter boundaries and keep_joins are manual decisions; the pipeline cannot infer them.
 - Vision-based checks were deliberately not used; verification is text-based only.
+
+
+## Source of truth: book.md
+
+Set `"source": "book.md"` in book.json to hand-edit book.md. The pipeline then never
+regenerates it: `--steps build,verify` only runs pandoc and verify (ocr/images are skipped).
+
+## Finished EPUB (MasasilaM style)
+
+Add a `"finish": {...}` object to book.json and `build` produces a finished edition:
+title page, colophon (credits, rights box, source link, attribution), nested TOC
+(chapters + `##` sections), full OPF metadata, `div.poem` verse, `div.image-with-caption`
+figures and `templates/masasilam.css`. book.md is not modified (a temporary input file
+is generated and deleted).
+
+    "finish": {
+      "publisher": "...", "subjects": ["..."], "toc_title": "Daftar Isi",
+      "source_label": "Pustaka Langka (...)",
+      "rights_lines": ["..."],
+      "credits": [["Koreksi manual", "Name"]],
+      "contributors": [["edt", "Name"]],
+      "contact": "optional mailto address",
+      "attribution_html": "optional footer HTML"
+    }
+
+Hand-edited colophon: put a `colophon.html` (raw HTML) in the book folder and the build uses it
+instead of the generated one; delete it to fall back to book.json `finish`. Use another file
+name with `"colophon_file"` in `finish`.
+
+License page: a back-matter page titled with the license name (default `CC BY-SA 4.0`, subtitle =
+full name) is added, and `dc:rights` carries the same name. Modelled on the MasasilaM edition of
+*Tahun yang Tak Pernah Berakhir* (in-copyright material: only the digital-edition work is licensed,
+rights in the original are not claimed, rights holders may object via `finish.contact`).
+`license.html` in the book folder overrides the text (the h1 title is still set by the license name);
+`"license": {"name": "...", "full_name": "...", "url": "..."}` in `finish` changes the license;
+`"license": false` omits the page. The licensing choice is the editor's decision: review it per book.
+
+Poems: consecutive italic paragraphs whose lines end with a backslash in book.md become one
+`div.poem`. Validate with `epubcheck` (`brew install epubcheck`).
+
+### Attribution
+
+The structure, class names and stylesheet follow the MasasilaM edition of
+*Menyambut Kongres Kebudayaan* (https://masasilam.com; contributors release their work under
+CC0 1.0). `templates/masasilam.css` is adapted from that edition's stylesheet and credits
+MasasilaM in its header. The colophon footer credits MasasilaM by default.
