@@ -9,7 +9,7 @@ Scanned PDF -> TurboOCR -> cleaned Markdown -> EPUB3, driven by <book_dir>/book.
   python3 pipeline.py <book_dir> --init             # write a starter book.json
   python3 pipeline.py <book_dir> --steps build,verify   # md-source books: pandoc only
 
-Finished EPUB: book.json "finish" {...} (colophon.html / license.html in the book folder, if present, replace the generated pages) switches build to the MasasilaM-style
+Finished EPUB: book.json "finish" {...} (colophon.html / license.html / titlepage.html / metadata.yaml in the book folder, if present, replace the generated pages) switches build to the MasasilaM-style
 edition (title page, colophon, nested TOC, poem/figure markup, templates/masasilam.css).
 
 Source of truth: book.json "source" = "ocr" (default; book.md is generated from
@@ -17,7 +17,8 @@ ocr/md pages) or "book.md" (book.md is hand-edited and is never regenerated;
 the build step only runs pandoc on it, and the ocr step is skipped; the images step still
 works and re-extracts epub_assets/ from ocr/md and the PDF).
 book.json "image_format": "jpg" (default) | "webp" (+ "webp_quality", default 75) selects the page-image
-format; the cover stays cover.jpg.
+format; the cover stays cover.jpg unless book.json "cover_image" points at another file (e.g.
+"epub_assets/cover.webp").
 
 Steps: ocr, images, build, verify.  build also writes review.txt.
 
@@ -76,6 +77,12 @@ def img_ext(cfg):
 
 
 IMG_EXT = "jpg"
+
+
+def cover_path(cfg):
+    """EPUB cover, relative to the book folder. book.json "cover_image" (e.g. a hand-made
+    epub_assets/cover.webp) wins; otherwise epub_assets/cover.jpg rendered from the PDF cover page."""
+    return cfg.get("cover_image") or "epub_assets/cover.jpg"
 
 
 def configure(cfg):
@@ -225,6 +232,9 @@ def extract_images(bd, cfg, n):
             else:
                 im.save(out, quality=82, optimize=True)
             count += 1
+    if cfg.get("cover_image"):
+        print(f"images: {count} page images; cover = {cfg['cover_image']} (cover_image set, PDF cover not rendered)")
+        return
     src = pymupdf.open(os.path.join(bd, cfg["source_pdf"]))
     cpage = src[cfg["cover_page"]]
     cdpi = int(max(10, min(160, 2400 * 72 / max(cpage.rect.width, cpage.rect.height))))   # cap long side at ~2400 px (huge scans)
@@ -510,7 +520,7 @@ def finish_license(cfg, fin):
     ])
 
 
-def finish_markdown(md, cfg, fin, colophon_html=None, license_html=None):
+def finish_markdown(md, cfg, fin, colophon_html=None, license_html=None, titlepage_html=None):
     """book.md -> pandoc input for the finished EPUB (title page, colophon, poems, figures)."""
     paras = md.split("\n\n")
     out, i = [], 0
@@ -533,15 +543,121 @@ def finish_markdown(md, cfg, fin, colophon_html=None, license_html=None):
     body = "\n\n".join(out)
     title = cfg["title"]
     head = [f'# {title} {{.titlepage .unlisted epub:type="titlepage"}}',
-            f'### {cfg.get("author", "")} {{.unlisted}}',
+            ("```{=html}\n" + titlepage_html + "\n```") if titlepage_html is not None
+            else f'### {cfg.get("author", "")} {{.unlisted}}',
             '# Kolofon {.colophon epub:type="colophon"}',
             "```{=html}\n" + (colophon_html if colophon_html is not None else finish_colophon(cfg, fin)) + "\n```"]
     tail = ""
     L = license_info(fin)
     if L:
         lic = license_html if license_html is not None else finish_license(cfg, fin)
-        tail = (f'\n\n# {L["name"]} {{.uncopyright epub:type="uncopyright"}}\n\n```{{=html}}\n' + lic + "\n```\n")
+        tail = (f'\n\n# {L.get("title") or L["name"]} {{.uncopyright epub:type="uncopyright"}}\n\n```{{=html}}\n' + lic + "\n```\n")
     return "\n\n".join(head) + "\n\n" + body + tail
+
+
+def metadata_file_args(bd, cfg):
+    """Hand-edited EPUB metadata (book folder metadata.yaml). Passed to pandoc AFTER the generated
+    metadata, so any key set there overrides the value derived from book.json."""
+    name = cfg.get("metadata_file", "metadata.yaml")
+    if os.path.exists(os.path.join(bd, name)):
+        print(f"metadata: using hand-edited {name}")
+        return ["--metadata-file", name]
+    return []
+
+
+def _plain(node):
+    """pandoc JSON inline/meta node -> plain text."""
+    t = node.get("t") if isinstance(node, dict) else None
+    c = node.get("c") if isinstance(node, dict) else None
+    if t in ("MetaString",):
+        return c
+    if t in ("MetaInlines", "MetaBlocks", "MetaList"):
+        return "".join(_plain(x) for x in c)
+    if t == "Str":
+        return c
+    if t in ("Space", "SoftBreak", "LineBreak"):
+        return " "
+    if t in ("Emph", "Strong", "Span", "Quoted", "SmallCaps", "Underline", "Strikeout", "Plain", "Para"):
+        inner = c[-1] if t in ("Span", "Quoted") else c
+        return "".join(_plain(x) for x in inner)
+    return ""
+
+
+def metadata_overrides(bd, cfg):
+    """title/author actually used by the book: metadata.yaml (if present) wins over book.json, so the
+    title page and generated colophon stay consistent with the OPF. Parsed by pandoc (no PyYAML needed)."""
+    out = {"title": cfg["title"], "author": cfg.get("author", "")}
+    name = cfg.get("metadata_file", "metadata.yaml")
+    if not os.path.exists(os.path.join(bd, name)):
+        return out
+    r = subprocess.run(["pandoc", "-f", "markdown", "-t", "json", "--metadata-file", name],
+                       cwd=bd, input="", capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"{name}: invalid YAML for pandoc:\n{r.stderr[:800]}")
+    meta = json.loads(r.stdout).get("meta", {})
+    for k in ("first-publisher", "first-published"):      # OPF-only: pandoc ignores them, we inject them
+        if k in meta and _plain(meta[k]).strip():
+            out[k] = _plain(meta[k]).strip()
+    if "title" in meta:
+        out["title"] = _plain(meta["title"]).strip() or out["title"]
+    cr = meta.get("creator")
+    if cr:
+        items = cr["c"] if cr.get("t") == "MetaList" else [cr]
+        names = []
+        for it in items:
+            if it.get("t") == "MetaMap":
+                role = _plain(it["c"].get("role", {"t": "MetaString", "c": "aut"})) if "role" in it["c"] else "aut"
+                if role in ("aut", "") and "text" in it["c"]:
+                    names.append(_plain(it["c"]["text"]).strip())
+            else:
+                names.append(_plain(it).strip())
+        if names:
+            out["author"] = " \u00b7 ".join(n for n in names if n)
+    return out
+
+
+def _yq(v):
+    return json.dumps(v, ensure_ascii=False)      # JSON scalars are valid YAML
+
+
+def export_metadata(bd, cfg):
+    """Write metadata.yaml pre-filled with the metadata the build currently generates (never overwrites)."""
+    name = cfg.get("metadata_file", "metadata.yaml")
+    path = os.path.join(bd, name)
+    if os.path.exists(path):
+        sys.exit(f"{name} already exists; edit it directly (delete it to re-export)")
+    fin = cfg.get("finish") or {}
+    m = finish_metadata(cfg, fin)
+    import uuid
+    L = ["# EPUB metadata, hand-editable. Any key set here overrides the value generated from book.json.",
+         "# Remove a key to fall back to the generated value. Rebuild with: pipeline.py <book> --steps build,verify",
+         "# Keys: title, subtitle, creator, contributor, publisher, subject, description, rights, source, date,",
+         "#       identifier, lang. Roles are MARC relators (aut, edt, trl, ill, trc, ...).",
+         "",
+         "# Pinned so readers keep reading position/annotations across rebuilds (a new random one is made",
+         "# on every build otherwise). Do not change after publishing.",
+         f"identifier: {_yq('urn:uuid:' + str(uuid.uuid4()))}",
+         "# Publication date of this edition (YYYY-MM-DD); without it the build timestamp is used.",
+         "# date: 2026-01-01", "",
+         "# OPF-only keys (injected after the build; pandoc has no field for them), as in the MasasilaM editions:",
+         "#   first-publisher -> <meta property=\"schema:firstPublisher\">  who first published the work",
+         "#   first-published -> <meta property=\"schema:firstPublished\">  year of first publication",
+         "# first-publisher: \"\"",
+         "# first-published: \"\"",
+         "# publisher must be ONE string (a YAML list makes pandoc write an empty <dc:publisher>); join several with \", \".", ""]
+    for k in ("title", "lang", "publisher", "rights", "source", "description"):
+        if m.get(k):
+            L.append(f"{k}: {_yq(m[k])}")
+    for k in ("creator", "contributor"):
+        if m.get(k):
+            L.append(f"{k}:")
+            for e in m[k]:
+                L += [f"  - role: {_yq(e['role'])}", f"    text: {_yq(e['text'])}"]
+    if m.get("subject"):
+        L.append("subject:")
+        L += [f"  - {_yq(x)}" for x in m["subject"]]
+    open(path, "w", encoding="utf-8").write("\n".join(L) + "\n")
+    print(f"wrote {path}")
 
 
 def finish_metadata(cfg, fin):
@@ -570,22 +686,39 @@ def finish_metadata(cfg, fin):
 LANDMARK_ID = {"Title Page": "Halaman Judul", "Cover": "Sampul", "Table of Contents": "Daftar Isi"}
 
 
-def postprocess_epub(epub, cfg, finished=False):
+def postprocess_epub(epub, cfg, finished=False, bd=None):
     """Fix-ups pandoc cannot express (rewrites the zip in place):
     - nav.xhtml stays in the package (EPUB 3 requires it; readers build their TOC menu from it) but is
       taken out of the reading order with linear="no", as in the MasasilaM reference editions;
     - Indonesian landmark labels when lang is id;
     - finished builds only: colophon -> frontmatter, uncopyright/license page -> backmatter."""
     src, tmp = epub, epub + ".tmp"
+    ov = metadata_overrides(bd, cfg) if bd else {}
+    schema_meta = [(f"schema:{prop}", ov[key]) for key, prop in
+                   (("first-published", "firstPublished"), ("first-publisher", "firstPublisher")) if ov.get(key)]
     with zipfile.ZipFile(src) as zi, zipfile.ZipFile(tmp, "w") as zo:
         for item in zi.infolist():
             data = zi.read(item.filename)
             name = item.filename
             if name.endswith("content.opf"):
+                if schema_meta:
+                    xml = "".join(f'    <meta property="{k}">{_he(v)}</meta>\n' for k, v in schema_meta).encode("utf-8")
+                    m = re.search(rb"</dc:publisher>[ \t]*\r?\n", data)
+                    if m:
+                        data = data[:m.end()] + xml + data[m.end():]
+                    else:
+                        data = data.replace(b"</metadata>", xml + b"</metadata>", 1)
+                # cover page: also out of the reading order (the cover image stays in the metadata/manifest,
+                # which is what readers and libraries use), as in the MasasilaM editions
+                data = re.sub(rb'(<itemref idref="cover_xhtml")(\s*/>)', rb'\1 linear="no"\2', data, count=1)
                 data, k = re.subn(rb'(<itemref idref="nav")(\s*/>)', rb'\1 linear="no"\2', data, count=1)
                 if not k and b'idref="nav" linear="no"' not in data:
                     sys.exit("postprocess: nav itemref not found in content.opf")
             elif name.endswith("/nav.xhtml") or name == "nav.xhtml":
+                if finished and b'epub:type="titlepage"' not in data.split(b'<nav epub:type="landmarks"')[-1]:
+                    # pandoc's own title page is disabled in finished builds; point the landmark at our ch001
+                    data = data.replace(b'<ol>\n    <li>\n      <a href="text/cover.xhtml"',
+                                        b'<ol>\n    <li>\n      <a href="text/ch001.xhtml" epub:type="titlepage">Title Page</a>\n    </li>\n    <li>\n      <a href="text/cover.xhtml"', 1)
                 if cfg.get("lang", "").startswith("id"):
                     for en, idn in LANDMARK_ID.items():
                         data = data.replace((">%s</a>" % en).encode(), (">%s</a>" % idn).encode())
@@ -615,13 +748,21 @@ def build_epub_finished(bd, cfg, fin):
     if os.path.exists(lic_p):
         lic = open(lic_p, encoding="utf-8").read().strip()
         print(f"license: using hand-edited {os.path.basename(lic_p)}")
-    open(tmp_md, "w", encoding="utf-8").write(finish_markdown(md, cfg, fin, col, lic))
+    tp_p = os.path.join(bd, fin.get("titlepage_file", "titlepage.html"))
+    tp = None
+    if os.path.exists(tp_p):
+        tp = open(tp_p, encoding="utf-8").read().strip()
+        print(f"titlepage: using hand-edited {os.path.basename(tp_p)}")
+    cfg_eff = {**cfg, **metadata_overrides(bd, cfg)}      # title/author from metadata.yaml if set
+    open(tmp_md, "w", encoding="utf-8").write(finish_markdown(md, cfg_eff, fin, col, lic, tp))
     json.dump(finish_metadata(cfg, fin), open(tmp_meta, "w", encoding="utf-8"), ensure_ascii=False)
     epub = os.path.join(bd, cfg["epub_name"])
     cmd = ["pandoc", ".book.finish.md", "-o", epub, "--from", "markdown+pipe_tables-implicit_figures",
-           "--to", "epub3", "--epub-cover-image=epub_assets/cover.jpg",
-           "--metadata-file", ".book.finish.json", "--css", css,
-           "--split-level=1", "--resource-path=.", "--toc", "--toc-depth=2"]
+           "--to", "epub3", "--epub-cover-image=" + cover_path(cfg),
+           "--metadata-file", ".book.finish.json", *metadata_file_args(bd, cfg), "--css", css,
+           "--split-level=1", "--resource-path=.", "--toc", "--toc-depth=2",
+           # the finished edition has its own title page (ch001); drop pandoc's duplicate title_page.xhtml
+           "--epub-title-page=false"]
     try:
         r = subprocess.run(cmd, cwd=bd, capture_output=True, text=True)
     finally:
@@ -631,7 +772,7 @@ def build_epub_finished(bd, cfg, fin):
     if r.returncode != 0 or "PandocResourceNotFound" in r.stderr:
         print("pandoc problems:\n" + r.stderr[:3000])
         sys.exit("build failed")
-    postprocess_epub(epub, cfg, finished=True)
+    postprocess_epub(epub, cfg, finished=True, bd=bd)
     print(f"EPUB (finished, MasasilaM style): {epub} ({os.path.getsize(epub) // 1024} KB)")
 
 
@@ -640,7 +781,7 @@ def build_epub(bd, cfg):
         return build_epub_finished(bd, cfg, cfg["finish"])
     epub = os.path.join(bd, cfg["epub_name"])
     cmd = ["pandoc", "book.md", "-o", epub, "--from", "markdown+pipe_tables", "--to", "epub3",
-           "--epub-cover-image=epub_assets/cover.jpg",
+           "--epub-cover-image=" + cover_path(cfg),
            "--metadata", f"title={cfg['title']}",
            *(["--metadata", f"author={cfg['author']}"] if cfg.get("author") else []),
            "--metadata", f"lang={cfg['lang']}",
@@ -648,11 +789,12 @@ def build_epub(bd, cfg):
     for key in ("publisher", "date", "description", "subject"):   # optional, from book.json
         if cfg.get(key):
             cmd += ["--metadata", f"{key}={cfg[key]}"]
+    cmd += metadata_file_args(bd, cfg)
     r = subprocess.run(cmd, cwd=bd, capture_output=True, text=True)
     if r.returncode != 0 or "PandocResourceNotFound" in r.stderr:
         print("pandoc problems:\n" + r.stderr[:3000])
         sys.exit("build failed")
-    postprocess_epub(epub, cfg)
+    postprocess_epub(epub, cfg, bd=bd)
     print(f"EPUB: {epub} ({os.path.getsize(epub) // 1024} KB)")
 
 
@@ -700,7 +842,7 @@ def verify(bd, cfg, n):
     nf = sum(1 for l in md.split("\n") if is_footer(l))
     if nf:
         fails.append(f"running footers left: {nf}")
-    refs = set(re.findall(r"epub_assets/([\w.-]+\.(?:jpg|webp))", md)) | {"cover.jpg"}
+    refs = set(re.findall(r"epub_assets/([\w.-]+\.(?:jpg|webp))", md)) | {os.path.basename(cover_path(cfg))}
     missing = sorted(r for r in refs if not os.path.exists(os.path.join(bd, "epub_assets", r)))
     if missing:
         fails.append(f"asset files missing: {missing}")
@@ -717,7 +859,7 @@ def verify(bd, cfg, n):
         xh = [x for x in names if x.endswith(".xhtml")]
         allx = "".join(z.read(x).decode("utf8", "ignore") for x in xh)
         plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", allx))
-        media = {x.split("/")[-1] for x in names if x.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))}
+        media = {x.split("/")[-1] for x in names if x.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".svg"))}
         erefs = set(re.findall(r'(?:src|xlink:href)="\.\./media/([^"]+)"', allx))
         if media != erefs:
             fails.append(f"media/reference mismatch: unreferenced={sorted(media - erefs)} "
@@ -757,6 +899,8 @@ def main():
     ap.add_argument("--pages", help="OCR only this range, e.g. 0-30 (inclusive)")
     ap.add_argument("--force-ocr", action="store_true")
     ap.add_argument("--init", action="store_true")
+    ap.add_argument("--export-metadata", action="store_true",
+                    help="write metadata.yaml pre-filled from the current config (hand-editable EPUB metadata)")
     a = ap.parse_args()
     bd = os.path.abspath(a.book_dir)
     if a.init:
@@ -764,6 +908,9 @@ def main():
         return
     cfg = load_cfg(bd)
     configure(cfg)
+    if a.export_metadata:
+        export_metadata(bd, cfg)
+        return
     steps = [s.strip() for s in a.steps.split(",") if s.strip()]
     if cfg.get("source", "ocr") == "book.md":
         if "ocr" in steps:

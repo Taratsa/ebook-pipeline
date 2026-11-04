@@ -419,6 +419,32 @@ img {
   text-indent: 0;
 }
 
+/* Taratsa addition: publisher logos side by side (div.logo-row), inline-block for wide reader support */
+.colophon .logo-row {
+  text-align: center;
+  margin: 1em 0 2em 0;
+  text-indent: 0;
+}
+.colophon .logo-row img {
+  display: inline-block;
+  vertical-align: middle;
+  max-width: 40% !important;
+  max-height: 100px !important;
+  width: auto;
+  height: auto;
+  margin: 0 0.3em !important;
+}
+/* the Taratsa mark is a tight, heavy glyph; the MasasilaM SVG carries its own padding, so scale them apart */
+.colophon .logo-row img:first-child {
+  max-height: 35px !important;
+  position: relative;
+  top: -16px;                     /* optical alignment with the MasasilaM emblem+wordmark midline */
+}
+.colophon .logo-row img:last-child {
+  margin-left: -0.3em !important; /* ... and has ~20% empty padding on each side; this sets the visible gap */
+  margin-right: -2em !important;  /* symmetric, so the pair stays centred */
+}
+
 section.colophon img, 
 section.imprint img,
 .colophon img, 

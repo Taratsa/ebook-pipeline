@@ -66,9 +66,40 @@ and compare book.md with the stored copy.
 Set `"source": "book.md"` in book.json to hand-edit book.md. The pipeline then never
 regenerates it: `--steps build,verify` only runs pandoc and verify (ocr/images are skipped).
 
+## Custom cover
+
+`"cover_image": "epub_assets/cover.webp"` in book.json uses a hand-made cover instead of the cover page
+rendered from the PDF (the `images` step then skips rendering it). Convert a PNG losslessly with
+`Image.open("cover.png").convert("RGB").save("cover.webp", "WEBP", lossless=True)`. Some stores and
+older readers ignore WebP covers; use a `.jpg` cover if the book is going to one.
+
+## Hand-editable EPUB metadata and content
+
+Files in the book folder, all optional; each one overrides what the build would generate:
+
+| File | Controls | Fallback if absent |
+|---|---|---|
+| `metadata.yaml` | OPF metadata: title, creator(s), contributor(s), publisher, subjects, description, rights, source, date, pinned `identifier`, `lang` | values derived from book.json |
+| `titlepage.html` | body of the title page (below the title) | author line |
+| `colophon.html` | the Kolofon page | generated from book.json `finish` |
+| `license.html` | the license page text | generated from `finish.license` |
+| `book.md` | all chapter text, images, poems | n/a (source) |
+
+`first-publisher` and `first-published` in metadata.yaml become `<meta property="schema:firstPublisher">`
+and `schema:firstPublished` in the OPF (pandoc has no field for them, so they are injected after the build,
+as in the MasasilaM editions). `publisher` must be a single string: a YAML list makes pandoc write an empty
+`<dc:publisher>`, so join several with ", ".
+
+Start `metadata.yaml` from the current values with `pipeline.py <book> --export-metadata` (never
+overwrites an existing file). Keys set there override book.json, and the title and author on the
+title page follow them. Pin `identifier` so readers keep reading position across rebuilds; set `date`
+to the edition date, otherwise the build timestamp is used. File names can be changed with
+`metadata_file` / `titlepage_file` / `colophon_file` / `license_file`.
+
 ## Navigation document
 
-Every build post-processes the EPUB: `nav.xhtml` stays in the package (EPUB 3 requires it, and readers build
+Every build post-processes the EPUB: `cover.xhtml` and `nav.xhtml` are both taken out of the reading order with
+`linear="no"` (the cover image stays in the metadata for readers and libraries). `nav.xhtml` stays in the package (EPUB 3 requires it, and readers build
 their TOC menu from it) but is taken out of the reading order with `linear="no"`, as in the MasasilaM
 editions; landmark labels are translated to Indonesian when `lang` is `id`.
 
@@ -106,7 +137,8 @@ full name) is added, and `dc:rights` carries the same name. Modelled on the Masa
 *Tahun yang Tak Pernah Berakhir* (in-copyright material: only the digital-edition work is licensed,
 rights in the original are not claimed, rights holders may object via `finish.contact`).
 `license.html` in the book folder overrides the text (the h1 title is still set by the license name);
-`"license": {"name": "...", "full_name": "...", "url": "..."}` in `finish` changes the license;
+`"license": {"name": "...", "full_name": "...", "url": "...", "title": "..."}` in `finish` changes the license
+(`title` = page/TOC heading, default the license name; use e.g. "Hak Cipta dan Lisensi" when only part of the book is licensed);
 `"license": false` omits the page. The licensing choice is the editor's decision: review it per book.
 
 Poems: consecutive italic paragraphs whose lines end with a backslash in book.md become one
