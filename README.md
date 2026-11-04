@@ -66,6 +66,19 @@ and compare book.md with the stored copy.
 Set `"source": "book.md"` in book.json to hand-edit book.md. The pipeline then never
 regenerates it: `--steps build,verify` only runs pandoc and verify (ocr/images are skipped).
 
+## Navigation document
+
+Every build post-processes the EPUB: `nav.xhtml` stays in the package (EPUB 3 requires it, and readers build
+their TOC menu from it) but is taken out of the reading order with `linear="no"`, as in the MasasilaM
+editions; landmark labels are translated to Indonesian when `lang` is `id`.
+
+## Image format
+
+`"image_format": "webp"` in book.json writes page images as `epub_assets/pNN_N.webp` (quality
+`"webp_quality"`, default 75; default format is `jpg`). The cover stays `cover.jpg`. After switching
+an existing md-source book, run `--steps images` and change the `.jpg` references in book.md to `.webp`
+(the images step never edits book.md). epubcheck accepts WebP, but very old readers may not render it.
+
 ## Finished EPUB (MasasilaM style)
 
 Add a `"finish": {...}` object to book.json and `build` produces a finished edition:

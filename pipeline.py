@@ -14,7 +14,10 @@ edition (title page, colophon, nested TOC, poem/figure markup, templates/masasil
 
 Source of truth: book.json "source" = "ocr" (default; book.md is generated from
 ocr/md pages) or "book.md" (book.md is hand-edited and is never regenerated;
-the build step only runs pandoc on it, and the ocr/images steps are skipped).
+the build step only runs pandoc on it, and the ocr step is skipped; the images step still
+works and re-extracts epub_assets/ from ocr/md and the PDF).
+book.json "image_format": "jpg" (default) | "webp" (+ "webp_quality", default 75) selects the page-image
+format; the cover stays cover.jpg.
 
 Steps: ocr, images, build, verify.  build also writes review.txt.
 
@@ -63,8 +66,21 @@ def load_cfg(bd):
     return cfg
 
 
+def img_ext(cfg):
+    """Extension of page images in epub_assets/ (book.json "image_format": "jpg" | "webp").
+    The cover stays JPEG (cover.jpg) for reader/library compatibility, as in the MasasilaM reference."""
+    fmt = cfg.get("image_format", "jpg").lower().lstrip(".")
+    if fmt not in ("jpg", "webp"):
+        sys.exit(f'image_format must be "jpg" or "webp", got {fmt!r}')
+    return fmt
+
+
+IMG_EXT = "jpg"
+
+
 def configure(cfg):
-    global KEEP, TYPO, FOOTERS
+    global KEEP, TYPO, FOOTERS, IMG_EXT
+    IMG_EXT = img_ext(cfg)
     KEEP = {tuple(p) for p in cfg["keep_joins"]}
     TYPO = [tuple(p) for p in cfg["typo_fixes"]]
     FOOTERS = [re.compile(p) for p in cfg["footer_patterns"]]
@@ -187,6 +203,7 @@ def extract_images(bd, cfg, n):
     from PIL import Image, ImageChops
     assets = os.path.join(bd, "epub_assets")
     os.makedirs(assets, exist_ok=True)
+    ext = img_ext(cfg)
     count = 0
     for p in range(n):
         t = open(md_path(bd, p), encoding="utf-8").read()
@@ -202,7 +219,11 @@ def extract_images(bd, cfg, n):
                 im = im.convert("L")
             if im.width > 1600:
                 im = im.resize((1600, int(im.height * 1600 / im.width)), Image.LANCZOS)
-            im.save(os.path.join(assets, f"p{p:02d}_{k}.jpg"), quality=82, optimize=True)
+            out = os.path.join(assets, f"p{p:02d}_{k}.{ext}")
+            if ext == "webp":
+                im.save(out, "WEBP", quality=int(cfg.get("webp_quality", 75)), method=6)
+            else:
+                im.save(out, quality=82, optimize=True)
             count += 1
     src = pymupdf.open(os.path.join(bd, cfg["source_pdf"]))
     cpage = src[cfg["cover_page"]]
@@ -286,7 +307,7 @@ def load_page(bd, i):
     n = [0]
 
     def img(m):
-        name = f"p{i:02d}_{n[0]}.jpg"
+        name = f"p{i:02d}_{n[0]}.{IMG_EXT}"
         n[0] += 1
         return f"epub_assets/{name}"
     t = re.sub(r"data:image/\w+;base64,[A-Za-z0-9+/=\s]+", img, t)
@@ -546,14 +567,29 @@ def finish_metadata(cfg, fin):
     return meta
 
 
-def _fix_body_types(epub):
-    """pandoc files colophon under backmatter and uncopyright under bodymatter; the MasasilaM
-    reference keeps the colophon in frontmatter and the uncopyright page in backmatter."""
+LANDMARK_ID = {"Title Page": "Halaman Judul", "Cover": "Sampul", "Table of Contents": "Daftar Isi"}
+
+
+def postprocess_epub(epub, cfg, finished=False):
+    """Fix-ups pandoc cannot express (rewrites the zip in place):
+    - nav.xhtml stays in the package (EPUB 3 requires it; readers build their TOC menu from it) but is
+      taken out of the reading order with linear="no", as in the MasasilaM reference editions;
+    - Indonesian landmark labels when lang is id;
+    - finished builds only: colophon -> frontmatter, uncopyright/license page -> backmatter."""
     src, tmp = epub, epub + ".tmp"
     with zipfile.ZipFile(src) as zi, zipfile.ZipFile(tmp, "w") as zo:
         for item in zi.infolist():
             data = zi.read(item.filename)
-            if item.filename.endswith(".xhtml"):
+            name = item.filename
+            if name.endswith("content.opf"):
+                data, k = re.subn(rb'(<itemref idref="nav")(\s*/>)', rb'\1 linear="no"\2', data, count=1)
+                if not k and b'idref="nav" linear="no"' not in data:
+                    sys.exit("postprocess: nav itemref not found in content.opf")
+            elif name.endswith("/nav.xhtml") or name == "nav.xhtml":
+                if cfg.get("lang", "").startswith("id"):
+                    for en, idn in LANDMARK_ID.items():
+                        data = data.replace((">%s</a>" % en).encode(), (">%s</a>" % idn).encode())
+            elif finished and name.endswith(".xhtml"):
                 if b'epub:type="colophon"' in data:
                     data = data.replace(b'<body epub:type="backmatter">', b'<body epub:type="frontmatter">', 1)
                 elif b'epub:type="uncopyright"' in data:
@@ -595,7 +631,7 @@ def build_epub_finished(bd, cfg, fin):
     if r.returncode != 0 or "PandocResourceNotFound" in r.stderr:
         print("pandoc problems:\n" + r.stderr[:3000])
         sys.exit("build failed")
-    _fix_body_types(epub)
+    postprocess_epub(epub, cfg, finished=True)
     print(f"EPUB (finished, MasasilaM style): {epub} ({os.path.getsize(epub) // 1024} KB)")
 
 
@@ -616,6 +652,7 @@ def build_epub(bd, cfg):
     if r.returncode != 0 or "PandocResourceNotFound" in r.stderr:
         print("pandoc problems:\n" + r.stderr[:3000])
         sys.exit("build failed")
+    postprocess_epub(epub, cfg)
     print(f"EPUB: {epub} ({os.path.getsize(epub) // 1024} KB)")
 
 
@@ -663,7 +700,7 @@ def verify(bd, cfg, n):
     nf = sum(1 for l in md.split("\n") if is_footer(l))
     if nf:
         fails.append(f"running footers left: {nf}")
-    refs = set(re.findall(r"epub_assets/([\w.-]+\.jpg)", md)) | {"cover.jpg"}
+    refs = set(re.findall(r"epub_assets/([\w.-]+\.(?:jpg|webp))", md)) | {"cover.jpg"}
     missing = sorted(r for r in refs if not os.path.exists(os.path.join(bd, "epub_assets", r)))
     if missing:
         fails.append(f"asset files missing: {missing}")
@@ -680,7 +717,7 @@ def verify(bd, cfg, n):
         xh = [x for x in names if x.endswith(".xhtml")]
         allx = "".join(z.read(x).decode("utf8", "ignore") for x in xh)
         plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", allx))
-        media = {x.split("/")[-1] for x in names if x.lower().endswith((".jpg", ".jpeg", ".png"))}
+        media = {x.split("/")[-1] for x in names if x.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))}
         erefs = set(re.findall(r'(?:src|xlink:href)="\.\./media/([^"]+)"', allx))
         if media != erefs:
             fails.append(f"media/reference mismatch: unreferenced={sorted(media - erefs)} "
@@ -729,9 +766,9 @@ def main():
     configure(cfg)
     steps = [s.strip() for s in a.steps.split(",") if s.strip()]
     if cfg.get("source", "ocr") == "book.md":
-        if "ocr" in steps or "images" in steps:
-            print("source=book.md: skipping ocr/images steps (book.md is the source)")
-        steps = [s for s in steps if s not in ("ocr", "images")]
+        if "ocr" in steps:
+            print("source=book.md: skipping ocr step (book.md is the source)")
+        steps = [s for s in steps if s != "ocr"]
     ok = True
     if "ocr" in steps:
         ok = ocr(bd, cfg, a.pages, a.force_ocr) and ok
@@ -739,7 +776,7 @@ def main():
             sys.exit(1)
     if "images" in steps or "build" in steps or "verify" in steps:
         # md-source books don't need the OCR page files; verify() ignores n
-        n = 0 if cfg.get("source", "ocr") == "book.md" else page_count(bd)
+        n = page_count(bd) if ("images" in steps or cfg.get("source", "ocr") != "book.md") else 0
     if "images" in steps:
         extract_images(bd, cfg, n)
     if "build" in steps:
