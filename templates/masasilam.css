@@ -419,7 +419,9 @@ img {
   text-indent: 0;
 }
 
-/* Taratsa addition: publisher logos side by side (div.logo-row), inline-block for wide reader support */
+/* Taratsa addition: publisher logos side by side (div.logo-row). Deliberately minimal for reader compatibility:
+   sizes come from the width/height attributes on the <img> (kolofon HTML), the SVGs are cropped to their visible
+   content (text outlined, no <style>), so plain centred inline images line up with no offsets or negative margins. */
 .colophon .logo-row {
   text-align: center;
   margin: 1em 0 2em 0;
@@ -428,21 +430,9 @@ img {
 .colophon .logo-row img {
   display: inline-block;
   vertical-align: middle;
-  max-width: 40% !important;
-  max-height: 100px !important;
-  width: auto;
-  height: auto;
-  margin: 0 0.3em !important;
-}
-/* the Taratsa mark is a tight, heavy glyph; the MasasilaM SVG carries its own padding, so scale them apart */
-.colophon .logo-row img:first-child {
-  max-height: 35px !important;
-  position: relative;
-  top: -16px;                     /* optical alignment with the MasasilaM emblem+wordmark midline */
-}
-.colophon .logo-row img:last-child {
-  margin-left: -0.3em !important; /* ... and has ~20% empty padding on each side; this sets the visible gap */
-  margin-right: -2em !important;  /* symmetric, so the pair stays centred */
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 1.2em !important;
 }
 
 section.colophon img, 
