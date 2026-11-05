@@ -535,17 +535,26 @@ def finish_markdown(md, cfg, fin, colophon_html=None, license_html=None, titlepa
                 i += 1
             out.append('```{=html}\n<div class="poem">\n' + "\n".join(stanzas) + "\n</div>\n```")
             continue
-        if re.fullmatch(r"!\[\]\(epub_assets/[^)]+\)", p):
+        if re.fullmatch(r"!\[\]\(epub_assets/[^)]+\)(\{[^}]*\})?", p):
             out.append("::: image-with-caption\n" + p + "\n:::")
         else:
             out.append(p)
         i += 1
     body = "\n\n".join(out)
     title = cfg["title"]
-    head = [f'# {title} {{.titlepage .unlisted epub:type="titlepage"}}',
+    lines = fin.get("title_lines")
+    tp_label = fin.get("titlepage_toc")           # e.g. "Judul": list the title page in the TOC under this label
+    tp_text = "<br/>".join(_he(l) for l in lines) if lines else title
+    tp_attrs = ('{#judul .titlepage epub:type="titlepage" title="%s"}' % tp_label) if tp_label \
+        else '{.titlepage .unlisted epub:type="titlepage"}'
+    # the reference colophon has an EMPTY h1 whose title attribute carries the label; the build empties the
+    # visible text after pandoc (class hidden-heading, see postprocess_epub) so the TOC keeps "Kolofon"
+    col_attrs = '{.colophon .hidden-heading epub:type="colophon" title="Kolofon"}' if fin.get("hide_colophon_heading", True) \
+        else '{.colophon epub:type="colophon"}'
+    head = [f'# {tp_text} {tp_attrs}',
             ("```{=html}\n" + titlepage_html + "\n```") if titlepage_html is not None
             else f'### {cfg.get("author", "")} {{.unlisted}}',
-            '# Kolofon {.colophon epub:type="colophon"}',
+            f'# Kolofon {col_attrs}',
             "```{=html}\n" + (colophon_html if colophon_html is not None else finish_colophon(cfg, fin)) + "\n```"]
     tail = ""
     L = license_info(fin)
@@ -686,17 +695,35 @@ def finish_metadata(cfg, fin):
 LANDMARK_ID = {"Title Page": "Halaman Judul", "Cover": "Sampul", "Table of Contents": "Daftar Isi"}
 
 
+def _sections_titles(zi):
+    """section id -> title attribute, for every text/*.xhtml (Sigil convention: title attr = TOC label)."""
+    out = {}
+    for n in zi.namelist():
+        if re.search(r"/text/[^/]+\.xhtml$", n):
+            for tag in re.findall(r"<section\b[^>]*>", zi.read(n).decode("utf-8")):
+                i, t = re.search(r'\bid="([^"]+)"', tag), re.search(r'\btitle="([^"]*)"', tag)
+                if i and t:
+                    out[i.group(1)] = t.group(1)
+    return out
+
+
 def postprocess_epub(epub, cfg, finished=False, bd=None):
     """Fix-ups pandoc cannot express (rewrites the zip in place):
-    - nav.xhtml stays in the package (EPUB 3 requires it; readers build their TOC menu from it) but is
-      taken out of the reading order with linear="no", as in the MasasilaM reference editions;
+    - cover.xhtml and nav.xhtml are taken OUT OF THE SPINE (not just linear="no": KOReader ignores linear="no"
+      by default, so the cover page and the multi-page nav counted as pages 1-5 and could be paged back to).
+      nav.xhtml stays in the package (readers build their TOC menu from it) and the cover image stays the
+      cover-image in the manifest. The landmarks that pointed at those two documents are dropped, since
+      epubcheck rejects landmarks to non-spine documents (RSC-011);
     - Indonesian landmark labels when lang is id;
-    - finished builds only: colophon -> frontmatter, uncopyright/license page -> backmatter."""
+    - finished builds: colophon -> frontmatter, license page -> backmatter, `hidden-heading` h1 emptied (its text
+      moves to a title attribute), a trailing bare <hr/> at the end of a chapter removed, and a section's
+      `title` attribute becomes its label in nav.xhtml and toc.ncx."""
     src, tmp = epub, epub + ".tmp"
     ov = metadata_overrides(bd, cfg) if bd else {}
     schema_meta = [(f"schema:{prop}", ov[key]) for key, prop in
                    (("first-published", "firstPublished"), ("first-publisher", "firstPublisher")) if ov.get(key)]
     with zipfile.ZipFile(src) as zi, zipfile.ZipFile(tmp, "w") as zo:
+        titles = _sections_titles(zi) if finished else {}
         for item in zi.infolist():
             data = zi.read(item.filename)
             name = item.filename
@@ -708,25 +735,52 @@ def postprocess_epub(epub, cfg, finished=False, bd=None):
                         data = data[:m.end()] + xml + data[m.end():]
                     else:
                         data = data.replace(b"</metadata>", xml + b"</metadata>", 1)
-                # cover page: also out of the reading order (the cover image stays in the metadata/manifest,
-                # which is what readers and libraries use), as in the MasasilaM editions
-                data = re.sub(rb'(<itemref idref="cover_xhtml")(\s*/>)', rb'\1 linear="no"\2', data, count=1)
-                data, k = re.subn(rb'(<itemref idref="nav")(\s*/>)', rb'\1 linear="no"\2', data, count=1)
-                if not k and b'idref="nav" linear="no"' not in data:
-                    sys.exit("postprocess: nav itemref not found in content.opf")
+                data, k = re.subn(rb'[ \t]*<itemref idref="nav"[^>]*/>[ \t]*\r?\n?', b"", data, count=1)
+                if not k and b'idref="nav"' in data:
+                    sys.exit("postprocess: could not remove nav itemref from content.opf")
+                data = re.sub(rb'[ \t]*<itemref idref="cover_xhtml"[^>]*/>[ \t]*\r?\n?', b"", data, count=1)
             elif name.endswith("/nav.xhtml") or name == "nav.xhtml":
                 if finished and b'epub:type="titlepage"' not in data.split(b'<nav epub:type="landmarks"')[-1]:
                     # pandoc's own title page is disabled in finished builds; point the landmark at our ch001
                     data = data.replace(b'<ol>\n    <li>\n      <a href="text/cover.xhtml"',
                                         b'<ol>\n    <li>\n      <a href="text/ch001.xhtml" epub:type="titlepage">Title Page</a>\n    </li>\n    <li>\n      <a href="text/cover.xhtml"', 1)
+                # landmarks to cover.xhtml / the nav itself point at non-spine documents -> drop
+                head, sep, lm = data.partition(b'<nav epub:type="landmarks"')
+                lm = re.sub(rb'\s*<li>\s*<a href="(?:text/cover\.xhtml|#toc)"[^>]*>[^<]*</a>\s*</li>', b"", lm)
+                data = head + sep + lm
                 if cfg.get("lang", "").startswith("id"):
                     for en, idn in LANDMARK_ID.items():
                         data = data.replace((">%s</a>" % en).encode(), (">%s</a>" % idn).encode())
+                if titles:
+                    t = data.decode("utf-8")
+                    for sid, label in titles.items():
+                        t = re.sub(r'(<a href="text/[^"#]+#%s">)(.*?)(</a>)' % re.escape(sid),
+                                   lambda m: m.group(1) + label + m.group(3), t, flags=re.S)
+                    data = t.encode("utf-8")
+            elif name.endswith("toc.ncx") and titles:
+                t = data.decode("utf-8")
+                for sid, label in titles.items():
+                    t = re.sub(r'(<text>)[^<]*(</text>\s*</navLabel>\s*<content src="text/[^"#]+#%s")' % re.escape(sid),
+                               lambda m: m.group(1) + label + m.group(2), t)
+                data = t.encode("utf-8")
             elif finished and name.endswith(".xhtml"):
                 if b'epub:type="colophon"' in data:
                     data = data.replace(b'<body epub:type="backmatter">', b'<body epub:type="frontmatter">', 1)
                 elif b'epub:type="uncopyright"' in data:
                     data = data.replace(b'<body epub:type="bodymatter">', b'<body epub:type="backmatter">', 1)
+                if b"hidden-heading" in data or b"<hr />" in data:
+                    t = data.decode("utf-8")
+
+                    def hide(m):
+                        attrs, text = m.group(1), m.group(2)
+                        attrs = re.sub(r"\s*\bhidden-heading\b", "", attrs)
+                        if "title=" not in attrs:
+                            plain = html.unescape(re.sub(r"<[^>]+>", " ", text))
+                            attrs += ' title="%s"' % _he(re.sub(r"\s+", " ", plain).strip())
+                        return "<h1%s></h1>" % attrs
+                    t = re.sub(r'<h1(\b[^>]*\bhidden-heading\b[^>]*)>(.*?)</h1>', hide, t, flags=re.S)
+                    t = re.sub(r"<hr />\s*((?:</section>\s*)+</body>)", r"\1", t)     # chapter separators
+                    data = t.encode("utf-8")
             zo.writestr(item, data, compress_type=item.compress_type)
     os.replace(tmp, src)
 
@@ -760,7 +814,7 @@ def build_epub_finished(bd, cfg, fin):
     cmd = ["pandoc", ".book.finish.md", "-o", epub, "--from", "markdown+pipe_tables-implicit_figures",
            "--to", "epub3", "--epub-cover-image=" + cover_path(cfg),
            "--metadata-file", ".book.finish.json", *metadata_file_args(bd, cfg), "--css", css,
-           "--split-level=1", "--resource-path=.", "--toc", "--toc-depth=2",
+           "--split-level=1", "--resource-path=.", "--toc", "--toc-depth=" + str(fin.get("toc_depth", 2)),
            # the finished edition has its own title page (ch001); drop pandoc's duplicate title_page.xhtml
            "--epub-title-page=false"]
     try:

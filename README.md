@@ -96,12 +96,34 @@ title page follow them. Pin `identifier` so readers keep reading position across
 to the edition date, otherwise the build timestamp is used. File names can be changed with
 `metadata_file` / `titlepage_file` / `colophon_file` / `license_file`.
 
-## Navigation document
+## Logos in the kolofon
 
-Every build post-processes the EPUB: `cover.xhtml` and `nav.xhtml` are both taken out of the reading order with
-`linear="no"` (the cover image stays in the metadata for readers and libraries). `nav.xhtml` stays in the package (EPUB 3 requires it, and readers build
-their TOC menu from it) but is taken out of the reading order with `linear="no"`, as in the MasasilaM
-editions; landmark labels are translated to Indonesian when `lang` is `id`.
+Put logos in `colophon.html` as `epub_assets/<file>.svg`. For several logos side by side wrap them in
+`<div class="logo-row">` (first image = first logo) and keep them as separate images. Readers differ in
+CSS and font support, so make each SVG self-contained instead of compensating in CSS:
+
+- `viewBox` cropped to the drawn content only (sources often carry ~20% empty padding);
+- live `<text>` converted to outlines (fontTools) and `<style>` classes inlined as `fill`/`stroke` attributes;
+- the same `width`/`height` on the `<svg>` root and on the `<img>` tag (the size is set there, not in CSS).
+
+`.logo-row` in `templates/masasilam.css` is deliberately bare (centred row, inline-block images,
+vertical-align middle): no offsets or negative margins.
+
+## Navigation document and cover page
+
+Every build removes `cover.xhtml` and `nav.xhtml` from the spine (reading order). `linear="no"` is not
+enough: KOReader ignores it unless "Hide non-linear fragments" is switched on, so the cover page and the
+multi-page TOC counted as pages 1-5 (a book opened at page 6) and you could page back onto the cover.
+The cover image stays the `cover-image` in the manifest (shelves and libraries still show it) and
+`nav.xhtml` stays in the package (readers build their TOC menu from it). The landmarks that pointed at the
+cover page and the nav are dropped, because epubcheck rejects landmarks to non-spine documents (RSC-011).
+Landmark labels are translated to Indonesian when `lang` is `id`.
+
+Finished builds also: `finish.title_lines` (title page broken over lines), `finish.titlepage_toc` (list the
+title page in the TOC under this label), `finish.toc_depth` (default 2), and an empty visible colophon
+heading whose `title` attribute carries the TOC label (`finish.hide_colophon_heading`, default true).
+In book.md, `{title="..."}` on a heading sets its TOC label, `![](x.webp){.image-medium}` sets a class on
+an image, and `<div class="subtitle"><strong>...</strong></div>` under a chapter heading is a subtitle.
 
 ## Image format
 
