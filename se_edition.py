@@ -306,51 +306,90 @@ def masthead_page(front, se, inline, images, labels):
     return page(title, "bodymatter", ind(body, 2)), exp
 
 
-def default_imprint(cfg, se, labels):
-    prod = se["producer"]["name"]
-    src = se.get("source_label") or "pindaian PDF"
-    return [
-        "Edisi digital ini disusun oleh %s dari %s. Teks dibaca dengan OCR, lalu diperiksa dengan pemeriksa ejaan "
-        "dan dikoreksi pada kesalahan OCR yang jelas." % (esc(prod), esc(src)),
-        "Hak cipta atas teks berada pada penulis dan/atau pemegang hak masing-masing; edisi ini tidak mengklaim hak atas isi tersebut. "
-        "Kontribusi penyuntingan edisi digital ini dilepaskan ke domain publik di bawah "
-        '<a href="https://creativecommons.org/publicdomain/zero/1.0/deed.id">CC0 1.0</a>. '
-        'Keterangan lengkap ada di halaman <a href="uncopyright.xhtml">%s</a> pada akhir buku.' % labels["license"],
-    ]
+SEED_HEADER = """<!-- {what}
+Edit freely. Rebuild with: python3 pipeline.py <book_dir> --steps se
+Delete this file to regenerate it from the template. This comment is not shown in the book.
+Format: one paragraph per blank line. *italic*  **bold**  [text](https://url)  "quotes" become curly quotes.
+A line ending in two spaces or a backslash is a line break. Raw inline HTML is passed through (the colophon uses it
+for Standard Ebooks semantics). Placeholders filled from book.json at build time: {{title}} {{author}} {{producer}}
+{{source_label}} {{date}} {{iso}} {{license}} -->
+
+"""
+
+SEEDS = {
+    "imprint": ("Keterangan Edisi (halaman imprint, awal buku)",
+                "Edisi digital ini disusun oleh {producer} dari {source_label}. Teks dibaca dengan OCR, lalu diperiksa dengan "
+                "pemeriksa ejaan dan dikoreksi pada kesalahan OCR yang jelas.\n\n"
+                "Hak cipta atas teks berada pada penulis dan/atau pemegang hak masing-masing; edisi ini tidak mengklaim hak atas "
+                "isi tersebut. Kontribusi penyuntingan edisi digital ini dilepaskan ke domain publik di bawah "
+                "[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/deed.id). "
+                "Keterangan lengkap ada di halaman [{license}](uncopyright.xhtml) pada akhir buku.\n"),
+    "colophon": ("Kolofon (akhir buku)",
+                 '<i epub:type="se:name.publication.book" xml:lang="id">{title}</i>  \noleh  \n'
+                 '<b epub:type="z3998:personal-name">{author}</b>.\n\n'
+                 "Edisi digital ini disusun oleh  \n**{producer}**  \ndari {source_label}.\n\n"
+                 'Sampul menggunakan huruf  \n<b epub:type="se:name.visual-art.typeface">League Spartan</b>,  \ndirancang oleh  \n'
+                 "[The League of Moveable Type](https://www.theleagueofmoveabletype.com/).\n\n"
+                 'Edisi digital ini pertama dirilis pada  \n<time datetime="{iso}">{date}</time>.\n'),
+    "license": ("Lisensi (akhir buku)",
+                "Kontribusi penyuntingan edisi digital ini, termasuk hasil OCR, pemeriksaan dan koreksi naskah, penataan huruf, "
+                "struktur EPUB, dan navigasi, dilepaskan ke domain publik di bawah "
+                "[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/deed.id).\n\n"
+                "Pelepasan ini tidak mencakup teks, foto, maupun isi lain yang menjadi dasar edisi ini, yang tetap menjadi milik "
+                "para pemegang haknya masing-masing. Edisi ini tidak mengklaim hak atas isi tersebut.\n"),
+}
+
+_TAG = re.compile(r"(<[^>]+>)")
 
 
-def default_colophon(cfg, se, labels, when):
-    lang = cfg.get("lang", "id")
-    prod = se["producer"]["name"]
-    return [
-        '<i epub:type="se:name.publication.book" xml:lang="%s">%s</i><br/>\noleh<br/>\n<b epub:type="z3998:personal-name">%s</b>.'
-        % (lang, esc(se["title"]), esc(se["author"])),
-        "Edisi digital ini disusun oleh<br/>\n<b>%s</b><br/>\ndari %s." % (esc(prod), esc(se.get("source_label") or "pindaian PDF")),
-        'Sampul menggunakan huruf<br/>\n<b epub:type="se:name.visual-art.typeface">League Spartan</b>,<br/>\ndirancang oleh<br/>\n'
-        '<a href="https://www.theleagueofmoveabletype.com/">The League of Moveable Type</a>.',
-        'Edisi digital ini pertama dirilis pada<br/>\n<time datetime="%s">%s</time>.' % (when["iso"], when["id"]),
-    ]
+def curly(s):
+    """Quote typography only (SE manual ch. 8); leaves spacing alone so inline markup keeps its spaces."""
+    s = re.sub(r'"([^"\n]*?)"', lambda m: "\u201c" + m.group(1) + "\u201d", s)
+    s = re.sub(r"(?<![A-Za-z])'([^'\n]+?)'(?![A-Za-z])", lambda m: "\u201c" + m.group(1) + "\u201d", s)
+    s = re.sub(r"\u201d([.,])", lambda m: m.group(1) + "\u201d", s)
+    return s
 
 
-def default_license(cfg, se, labels):
-    return [
-        "Kontribusi penyuntingan edisi digital ini, termasuk hasil OCR, pemeriksaan dan koreksi naskah, penataan huruf, struktur EPUB, "
-        'dan navigasi, dilepaskan ke domain publik di bawah <a href="https://creativecommons.org/publicdomain/zero/1.0/deed.id">CC0 1.0</a>.',
-        "Pelepasan ini tidak mencakup teks, foto, maupun isi lain yang menjadi dasar edisi ini, yang tetap menjadi milik para pemegang "
-        "haknya masing-masing. Edisi ini tidak mengklaim hak atas isi tersebut.",
-    ]
+def md_para(text):
+    """One markdown paragraph -> inline XHTML. Subset: *i* **b** [t](u), line breaks, curly quotes, raw inline HTML."""
+    lines = text.strip("\n").split("\n")
+    out = []
+    for i, ln in enumerate(lines):
+        hard = ln.endswith("  ") or ln.endswith("\\")
+        ln = ln.rstrip().rstrip("\\").rstrip()
+        out.append(ln + ("\x01" if hard and i < len(lines) - 1 else (" " if i < len(lines) - 1 else "")))
+    t = "".join(out)
+    parts = _TAG.split(t)
+    for i in range(0, len(parts), 2):                     # text segments only; tags (odd indexes) pass through
+        seg = re.sub(r"&(?!#?\w+;)", "&amp;", parts[i])
+        seg = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", lambda m: "\x02%s\x03%s\x04" % (m.group(2), m.group(1)), seg)
+        seg = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", seg)
+        seg = re.sub(r"(?<![\w*])\*([^*\n]+)\*(?![\w*])", r"<i>\1</i>", seg)
+        seg = curly(seg)
+        parts[i] = seg
+    t = "".join(parts)
+    t = re.sub(r"\x02([^\x03]+)\x03", r'<a href="\1">', t).replace("\x04", "</a>").replace("\x01", "<br/>\n")
+    return t.strip()
 
 
-def user_paras(bd, name, default, subs):
-    """Hand-editable page body: <book_dir>/<name> holds raw <p> text, one paragraph per blank-line block."""
-    p = os.path.join(bd, name)
-    if os.path.exists(p):
-        txt = re.sub(r"<!--.*?-->", "", open(p, encoding="utf-8").read(), flags=re.S)
-        for k, v in subs.items():
-            txt = txt.replace("{" + k + "}", v)
-        print("se: using hand-edited", name)
-        return [b.strip() for b in txt.split("\n\n") if b.strip()]
-    return default
+def page_paras(bd, kind, cfg, se, labels, subs):
+    """Body paragraphs of a SE front/back page from <book_dir>/se-<kind>.md. The file is created from SEEDS on first
+    run so it can be edited by hand; legacy se-<kind>.html (raw <p> text) is still read if present."""
+    md_p, html_p = (os.path.join(bd, "se-%s.%s" % (kind, ext)) for ext in ("md", "html"))
+    if not os.path.exists(md_p) and not os.path.exists(html_p):
+        what, body = SEEDS[kind]
+        open(md_p, "w", encoding="utf-8").write(SEED_HEADER.format(what=what) + body)
+        print("se: created %s (edit it by hand; delete it to regenerate)" % os.path.basename(md_p))
+    path = md_p if os.path.exists(md_p) else html_p
+    txt = re.sub(r"<!--.*?-->", "", open(path, encoding="utf-8").read(), flags=re.S)
+    for k in sorted(subs, key=len, reverse=True):
+        txt = txt.replace("{" + k + "}", subs[k])
+    unknown = sorted(set(re.findall(r"\{[a-z_]+\}", txt)))
+    if unknown:
+        fail("%s uses unknown placeholder(s) %s; known: %s" % (os.path.basename(path), ", ".join(unknown), ", ".join("{%s}" % k for k in sorted(subs))))
+    blocks = [b.strip("\n") for b in re.split(r"\n\s*\n", txt) if b.strip()]
+    print("se: %s from hand-editable %s" % (kind, os.path.basename(path)))
+    return [b.strip() if path == html_p else md_para(b) for b in blocks]
 
 
 def paras_html(paras):
@@ -724,16 +763,17 @@ def build_se(bd, cfg):
         '<section id="titlepage" epub:type="titlepage">\n\t<h1 epub:type="title">%s</h1>\n'
         '\t<p>%s <b epub:type="z3998:author z3998:personal-name">%s</b>.</p>\n</section>'
         % (esc(se["title"]), labels["by"], esc(se["author"])), 2)))
-    subs = {"date": when["id"], "iso": when["iso"], "producer": se["producer"]["name"]}
-    imprint = user_paras(bd, "se-imprint.html", default_imprint(cfg, se, labels), subs)
+    subs = {"date": when["id"], "iso": when["iso"], "producer": esc(se["producer"]["name"]), "title": esc(se["title"]),
+            "author": esc(se["author"]), "source_label": esc(se.get("source_label") or "pindaian PDF"), "license": labels["license"]}
+    imprint = page_paras(bd, "imprint", cfg, se, labels, subs)
     write(os.path.join(text_dir, "imprint.xhtml"), page(labels["imprint"], "frontmatter", ind(
         '<section id="imprint" epub:type="imprint">\n\t<h2 epub:type="title">%s</h2>\n%s\n</section>'
         % (labels["imprint"], paras_html(imprint)), 2)))
-    colophon = user_paras(bd, "se-colophon.html", default_colophon(cfg, se, labels, when), subs)
+    colophon = page_paras(bd, "colophon", cfg, se, labels, subs)
     write(os.path.join(text_dir, "colophon.xhtml"), page(labels["colophon"], "backmatter", ind(
         '<section id="colophon" epub:type="colophon">\n\t<h2 epub:type="title">%s</h2>\n%s\n</section>'
         % (labels["colophon"], paras_html(colophon)), 2)))
-    lic = user_paras(bd, "se-license.html", default_license(cfg, se, labels), subs)
+    lic = page_paras(bd, "license", cfg, se, labels, subs)
     write(os.path.join(text_dir, "uncopyright.xhtml"), page(labels["license"], "backmatter", ind(
         '<section id="uncopyright" epub:type="copyright-page">\n\t<h2 epub:type="title">%s</h2>\n%s\n</section>'
         % (labels["license"], paras_html(lic)), 2)))

@@ -229,9 +229,14 @@ reports 0 fatals/errors/warnings.
       "production_notes": ["..."], "released": "set automatically on first build"
     }
 
-Hand-editable pages: `se-imprint.html`, `se-colophon.html`, `se-license.html` in the book folder hold one
-paragraph per blank-line block (raw inline HTML allowed; `{date}`, `{iso}`, `{producer}` are substituted).
-Delete a file to fall back to the generated text. `se-src/` and `se-out/` are regenerated on every run.
+Hand-editable pages (markdown, created from a template on the first `--steps se` run, then yours):
+`se-imprint.md` (Keterangan Edisi, front), `se-colophon.md` (Kolofon, back), `se-license.md` (Lisensi, back).
+One paragraph per blank line; `*italic*`, `**bold**`, `[text](url)`, a trailing double space or `\\` for a line break,
+straight quotes become curly, raw inline HTML passes through (the colophon seed uses it for SE semantics). Placeholders
+`{title} {author} {producer} {source_label} {date} {iso} {license}` are filled from book.json; an unknown `{name}` stops
+the build. The `<!-- ... -->` header is not shown in the book. Delete a file to regenerate it from the template. An older
+`se-<page>.html` (raw `<p>` text) is still read if no `.md` exists. These are separate from the normal EPUB's `license.html`
+and `colophon.html`. `se-src/` and `se-out/` are regenerated on every run: never edit them.
 
 Never invent `dc:source`, contacts, publisher names or licence choices: take them from the source or ask.
 
