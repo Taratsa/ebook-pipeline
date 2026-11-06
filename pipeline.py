@@ -21,6 +21,8 @@ format; the cover stays cover.jpg unless book.json "cover_image" points at anoth
 "epub_assets/cover.webp").
 
 Steps: ocr, images, build, verify, se.  build also writes review.txt.
+Correction ledger: for a hand-edited book.md use corrections.py (every edit logged in corrections.json /
+corrections.md); with book.json "corrections": {"enforce": true}, verify fails on any unlogged edit.
 Standard Ebooks edition: `--steps se` (book.json "se" block; see se_edition.py and README) builds a second,
 SE-manual-1.9.1 EPUB "<epub_name> (SE).epub" from book.md and gates it with se lint, a word-parity check and epubcheck.
 
@@ -939,6 +941,13 @@ def verify(bd, cfg, n):
                 fails.append(f"chapter missing from TOC: {title!r}")
         stats = {"epub_kb": os.path.getsize(epub_p) // 1024, "words": len(plain.split()),
                  "images": len(media), "toc_entries": len(toc), "pages": n}
+    if cfg.get("corrections", {}).get("enforce"):
+        # every change from the OCR baseline to book.md must be an entry in corrections.json (see corrections.py)
+        import corrections
+        try:
+            fails += ["corrections: " + x for x in corrections.check(bd, scan=True)]
+        except SystemExit as e:
+            fails.append(str(e))
     report = {"ok": not fails, "failures": fails, "stats": stats}
     json.dump(report, open(os.path.join(bd, "verify.json"), "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)

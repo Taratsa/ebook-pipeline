@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 tools/ocrcheck/target/
 .DS_Store
+lexicon/
