@@ -13,7 +13,7 @@ One script, one per-book config file. Book-independent code lives in `pipeline.p
     P=/Users/sf/Documents/workspaces/pdf-to-epub-turboocr/pipeline.py
 
     python3 $P "$BOOK" --init            # writes book.json with TODOs
-    # 1. edit book.json: ocr.server, title, author, epub_name
+    # 1. edit book.json: title, author, epub_name; export TURBOOCR_SERVER=http://<host>:8020 (never write the address into book.json)
     python3 $P "$BOOK" --steps ocr       # resumable; re-run if it reports failed pages
     # 2. read the document's OWN table of contents (from the OCR output of the TOC page),
     #    fill "chapters" = [start_page_index, title, eyebrow_or_null]
@@ -24,7 +24,7 @@ One script, one per-book config file. Book-independent code lives in `pipeline.p
 Page indexes are 0-based and match the PDF page order.
 
 ## What is book-specific (book.json only)
-- source_pdf, ocr.server, title, author, lang, epub_name
+- source_pdf, ocr.server (leave the `http://HOST:8020` placeholder; the real address comes from the TURBOOCR_SERVER environment variable and is never committed), title, author, lang, epub_name
 - cover_page, skip_pages, front_matter
 - chapters: [start_page, title, eyebrow] — take these from the document's TOC, never guess them
 - footer_patterns: regexes for running footers (page header/footer lines)

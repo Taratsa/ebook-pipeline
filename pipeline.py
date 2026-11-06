@@ -156,7 +156,11 @@ def ocr(bd, cfg, pages_arg, force):
         pages = range(int(a), int(b or a) + 1)
     else:
         pages = range(n)
-    url = f"{oc['server'].rstrip('/')}/ocr/pdf?mode={oc['mode']}&markdown=1&dpi={oc['dpi']}"
+    # The server address is private: keep it out of book.json (which is committed). Set TURBOOCR_SERVER in the shell.
+    server = (os.environ.get("TURBOOCR_SERVER") or oc["server"]).rstrip("/")
+    if "HOST" in server:
+        sys.exit("ocr: no server. Run: export TURBOOCR_SERVER=http://<host>:8020  (book.json keeps the placeholder on purpose)")
+    url = f"{server}/ocr/pdf?mode={oc['mode']}&markdown=1&dpi={oc['dpi']}"
     tmp = os.path.join(bd, "ocr", "md", "_one_page.pdf")
     failed = []
     for p in pages:
