@@ -234,7 +234,8 @@ Hand-editable pages (markdown, created from a template on the first `--steps se`
 One paragraph per blank line; `*italic*`, `**bold**`, `[text](url)`, a trailing double space or `\\` for a line break,
 straight quotes become curly, raw inline HTML passes through (the colophon seed uses it for SE semantics). Placeholders
 `{title} {author} {producer} {source_label} {date} {iso} {license}` are filled from book.json; an unknown `{name}` stops
-the build. The `<!-- ... -->` header is not shown in the book. Delete a file to regenerate it from the template. An older
+the build. The seeded files contain the real text, not placeholders: change e.g. the `dari pindaian PDF ...` source wording directly in
+`se-imprint.md` / `se-colophon.md`; `se.source_label` in book.json is only used to seed them on creation. The `<!-- ... -->` header is not shown in the book. Delete a file to regenerate it from the template. An older
 `se-<page>.html` (raw `<p>` text) is still read if no `.md` exists. These are separate from the normal EPUB's `license.html`
 and `colophon.html`. `se-src/` and `se-out/` are regenerated on every run: never edit them.
 

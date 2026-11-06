@@ -307,12 +307,12 @@ def masthead_page(front, se, inline, images, labels):
 
 
 SEED_HEADER = """<!-- {what}
-Edit freely. Rebuild with: python3 pipeline.py <book_dir> --steps se
+Edit freely: the text below is the text in the book (no hidden values). Rebuild: python3 pipeline.py <book_dir> --steps se
 Delete this file to regenerate it from the template. This comment is not shown in the book.
 Format: one paragraph per blank line. *italic*  **bold**  [text](https://url)  "quotes" become curly quotes.
 A line ending in two spaces or a backslash is a line break. Raw inline HTML is passed through (the colophon uses it
-for Standard Ebooks semantics). Placeholders filled from book.json at build time: {{title}} {{author}} {{producer}}
-{{source_label}} {{date}} {{iso}} {{license}} -->
+for Standard Ebooks semantics). Optional placeholders, filled from book.json at build time if you type them:
+{{title}} {{author}} {{producer}} {{source_label}} {{date}} {{iso}} {{license}} -->
 
 """
 
@@ -378,6 +378,8 @@ def page_paras(bd, kind, cfg, se, labels, subs):
     md_p, html_p = (os.path.join(bd, "se-%s.%s" % (kind, ext)) for ext in ("md", "html"))
     if not os.path.exists(md_p) and not os.path.exists(html_p):
         what, body = SEEDS[kind]
+        for k in sorted(subs, key=len, reverse=True):      # write the real text into the file: what you see is what you edit
+            body = body.replace("{" + k + "}", subs[k])
         open(md_p, "w", encoding="utf-8").write(SEED_HEADER.format(what=what) + body)
         print("se: created %s (edit it by hand; delete it to regenerate)" % os.path.basename(md_p))
     path = md_p if os.path.exists(md_p) else html_p
@@ -786,7 +788,7 @@ def build_se(bd, cfg):
     make_cover(bd, se, os.path.join(epub_dir, "images", "cover.jpg"))
 
     notes = ["# Catatan produksi", "",
-             "- Sumber: %s. Teks berasal dari OCR (TurboOCR), bukan dari ketik ulang." % (se.get("source_label") or "pindaian PDF"),
+             "- Sumber dan keterangan edisi: lihat `se-imprint.md` dan `se-colophon.md` (dapat disunting langsung). Teks berasal dari OCR (TurboOCR), bukan dari ketik ulang.",
              "- Naskah dibaca langsung dari `book.md`; edisi ini dibangun ulang dengan `pipeline.py --steps se`.",
              "- Koreksi OCR hanya pada kesalahan yang jelas (pemeriksa ejaan SymSpell, ditinjau manual). Ejaan lama dan tidak baku dari narasumber dipertahankan.",
              "- Kutip lurus dan kutip tunggal diubah menjadi kutip lengkung ganda sesuai manual SE; titik dan koma ditaruh di dalam tanda kutip.",
