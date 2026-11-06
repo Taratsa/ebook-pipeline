@@ -21,8 +21,7 @@ format; the cover stays cover.jpg unless book.json "cover_image" points at anoth
 "epub_assets/cover.webp").
 
 Steps: ocr, images, build, verify, se.  build also writes review.txt.
-Correction ledger: for a hand-edited book.md use corrections.py (every edit logged in corrections.json /
-corrections.md); with book.json "corrections": {"enforce": true}, verify fails on any unlogged edit.
+Correction ledger: for a hand-edited book.md use corrections.py (every edit logged in corrections.json); with book.json "corrections": {"enforce": true}, verify fails on any unlogged edit.
 Standard Ebooks edition: `--steps se` (book.json "se" block; see se_edition.py and README) builds a second,
 SE-manual-1.9.1 EPUB "<epub_name> (SE).epub" from book.md and gates it with se lint, a word-parity check and epubcheck.
 
