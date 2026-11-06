@@ -172,3 +172,62 @@ The structure, class names and stylesheet follow the MasasilaM edition of
 *Menyambut Kongres Kebudayaan* (https://masasilam.com; contributors release their work under
 CC0 1.0). `templates/masasilam.css` is adapted from that edition's stylesheet and credits
 MasasilaM in its header. The colophon footer credits MasasilaM by default.
+
+## Standard Ebooks edition (`--steps se`)
+
+A second, independent artifact: `<epub_name> (SE).epub`, built from `book.md` to the Standard Ebooks
+Manual of Style 1.9.1 (https://standardebooks.org/manual/1.9.1) and gated by the real SE toolchain.
+The normal EPUB and `book.json` flow are unchanged; the SE step is opt-in.
+
+    python3 pipeline.py <book_dir> --steps se
+
+Toolchain (once): `uv tool install standardebooks`, `brew install cairo` (the step sets
+`DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` for `se`). epubcheck is optional but used when present.
+
+What `se_edition.py` does, and where it departs from stock SE (the `se` tool itself is never modified):
+
+- Text comes only from `book.md`. Chapters = `#` headings other than `front_matter.heading`; `##` and deeper
+  become nested `z3998:subchapter` sections. Tables, lists, verse and raw HTML are not supported and stop the
+  build with a message instead of being guessed. Scanner footers ("N dari M halaman") are dropped and
+  paragraphs split by a page break (no end punctuation + lowercase start) are rejoined.
+- Typography per the manual: curly double quotes (single quotes only for nesting), `.`/`,` inside quotes,
+  no space before closing punctuation. Acronyms get `z3998:acronym` (Indonesian writes them without periods),
+  foreign words get `<i xml:lang>`, titles of publications get `se:name.*` italics: all listed in `book.json`.
+- White-label: no SE logo, no SE imprint claim. The stock Uncopyright (says "US public domain") is replaced by a
+  licence page (CC0 for the editorial work only, text stays with its rights holders).
+- Indonesian: `se` hard-codes English navigation labels and `se lint` demands them in the source, so the source
+  stays SE-compliant and the finished EPUB is localised afterwards (Daftar Isi, Penanda, Halaman Judul, Bagian Awal;
+  override with `se.labels`). The nav `aria-labelledby` is dropped because epubcheck 5.4 rejects it (5.3, bundled
+  with `se`, accepts it).
+- Cover: plain typographic 1400x2100 (League Spartan, shipped with `se`), or `se.cover_image`.
+- `se-lint-ignore.xml` is generated; each rule carries a reason, and rules that match nothing are removed
+  (`se lint` fails on unused ones).
+
+Gates (the step exits 1 unless all pass): `se lint` prints nothing; word parity of `book.md` against the generated
+body is exactly equal (tokens, ignoring quote marks); `se build --check` succeeds; epubcheck (bundled and system)
+reports 0 fatals/errors/warnings.
+
+`book.json` `"se"` block (required keys marked *):
+
+    "se": {
+      "author"*, "publisher"*, "producer"*: {"name"}, "rights"*, "abstract"*, "description_html"*,
+      "subjects"*: [["Human rights--Indonesia", "sh2008105905"]],   # LCSH label + id; look them up, do not guess
+      "title": "main title (no subtitle)", "subtitle", "work": "file-name slug", "author_full_name", "author_file_as",
+      "author_wikipedia", "author_loc": "https://id.loc.gov/authorities/names/<id>.html",
+      "contributors": [{"id": "interviewer", "name", "file_as", "role": "ivr", "wikipedia"}],
+      "sources": ["https://..."],          # dc:source; leave out when the origin is unverified
+      "source_label": "pindaian PDF ...", "genre": "Nonfiction",
+      "qa": true,                            # interviews: paragraphs ending in "?" get class="question"
+      "epigraph": {"heading": "Highlight", "cite": "Munir"},   # front-matter heading whose next paragraph is the epigraph
+      "acronyms": [], "name_titles": ["SH"], "foreign": {"en": ["..."]}, "italic_names": [{"text", "type"}],
+      "image_alt": {"p03_0.webp": "Prose description ending in a period."},   # required for every image
+      "cover_image": "epub_assets/x.jpg", "cover_title", "labels": {}, "lint_ignore": [{"file","code","reason"}],
+      "production_notes": ["..."], "released": "set automatically on first build"
+    }
+
+Hand-editable pages: `se-imprint.html`, `se-colophon.html`, `se-license.html` in the book folder hold one
+paragraph per blank-line block (raw inline HTML allowed; `{date}`, `{iso}`, `{producer}` are substituted).
+Delete a file to fall back to the generated text. `se-src/` and `se-out/` are regenerated on every run.
+
+Never invent `dc:source`, contacts, publisher names or licence choices: take them from the source or ask.
+

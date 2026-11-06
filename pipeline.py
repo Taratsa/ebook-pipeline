@@ -20,7 +20,9 @@ book.json "image_format": "jpg" (default) | "webp" (+ "webp_quality", default 75
 format; the cover stays cover.jpg unless book.json "cover_image" points at another file (e.g.
 "epub_assets/cover.webp").
 
-Steps: ocr, images, build, verify.  build also writes review.txt.
+Steps: ocr, images, build, verify, se.  build also writes review.txt.
+Standard Ebooks edition: `--steps se` (book.json "se" block; see se_edition.py and README) builds a second,
+SE-manual-1.9.1 EPUB "<epub_name> (SE).epub" from book.md and gates it with se lint, a word-parity check and epubcheck.
 
 Layout written inside <book_dir>:
   ocr/md/pNN.md     raw TurboOCR markdown per page (inline base64 images)
@@ -34,6 +36,7 @@ Layout written inside <book_dir>:
 Everything book-specific lives in book.json. The code below is book-independent.
 """
 import argparse, base64, collections, html, io, json, os, re, subprocess, sys, time, zipfile
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 LOG = []                 # audit trail of join decisions (written to review.txt)
 HITS = collections.Counter()   # which keep_joins entries actually matched
@@ -984,6 +987,9 @@ def main():
         build(bd, cfg, n)
     if "verify" in steps:
         ok = verify(bd, cfg, n) and ok
+    if "se" in steps:
+        import se_edition   # only needed for this step; keeps `se`/cairo optional for everyone else
+        ok = se_edition.build_se(bd, cfg) and ok
     sys.exit(0 if ok else 1)
 
 
