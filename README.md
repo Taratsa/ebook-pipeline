@@ -199,6 +199,10 @@ What `se_edition.py` does, and where it departs from stock SE (the `se` tool its
   stays SE-compliant and the finished EPUB is localised afterwards (Daftar Isi, Penanda, Halaman Judul, Bagian Awal;
   override with `se.labels`). The nav `aria-labelledby` is dropped because epubcheck 5.4 rejects it (5.3, bundled
   with `se`, accepts it).
+- Source page: the book.md front matter (e.g. a magazine masthead and its info box) is kept as its own "Halaman Sumber"
+  page right after the imprint, in source order with its image. Headings listed in `se.masthead.sections` become
+  sub-sections, the others are centred masthead lines; `se.masthead.enabled: false` drops the page. It is part of the
+  word-parity check, so nothing from the front matter can silently go missing.
 - Cover: plain typographic 1400x2100 (League Spartan, shipped with `se`), or `se.cover_image`.
 - `se-lint-ignore.xml` is generated; each rule carries a reason, and rules that match nothing are removed
   (`se lint` fails on unused ones).

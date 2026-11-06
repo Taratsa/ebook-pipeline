@@ -38,6 +38,7 @@ LABELS = {
         "imprint": "Keterangan Edisi",
         "colophon": "Kolofon",
         "license": "Lisensi",
+        "masthead": "Halaman Sumber",
         "by": "Oleh",
     },
 }
@@ -256,6 +257,55 @@ def chapter_xhtml(cfg, se, inline, idx, n_chapters, title, blocks, images, front
     return cid, page(title, "bodymatter", ind(sec, 2)), sec
 
 
+def masthead_page(front, se, inline, images, labels):
+    """The source's own front page (book.md front matter, e.g. a magazine masthead) shown as printed, in order.
+    Headings listed in se.masthead.sections become sub-sections (h3); every other heading is a plain masthead line.
+    -> (xhtml, expected_tokens)"""
+    sections = set((se.get("masthead") or {}).get("sections", []))
+    parts, exp, in_sec = [], [], False
+
+    def close():
+        nonlocal in_sec
+        if in_sec:
+            parts.append("</section>")
+            in_sec = False
+
+    for raw in front:
+        m = re.match(r"(#{2,6}) +(.+)$", raw, re.S)
+        img = re.fullmatch(r"!\[[^\]]*\]\(([^)]+)\)(\{[^}]*\})?", raw)
+        if m:
+            text = m.group(2).strip()
+            exp += tokens(text)
+            if text in sections:
+                close()
+                parts.append('<section id="%s" epub:type="z3998:subchapter">' % slugify(text))
+                parts.append('\t<h3 epub:type="title">%s</h3>' % esc(typo(text)))
+                in_sec = True
+            else:
+                close()
+                parts.append('<p class="masthead">%s</p>' % inline(text))
+        elif img:
+            close()
+            src = re.match(r"!\[[^\]]*\]\(([^)]+)\)", raw).group(1)
+            alt = (se.get("image_alt") or {}).get(os.path.basename(src))
+            if not alt:
+                fail("no alt text for image %s: add it to book.json se.image_alt" % src)
+            n = len(images) + 1
+            images.append((src, "illustration-%d.jpg" % n))
+            parts.append('<figure id="illustration-%d">\n\t<img alt="%s" src="../images/illustration-%d.jpg" epub:type="z3998:illustration"/>\n</figure>'
+                         % (n, esc(alt), n))
+        else:
+            if raw.startswith(("<", "|", "```", ":::")) or re.match(r"(?m)^([-*+] |\d+\. )", raw):
+                fail("unsupported construct in book.md front matter: %r" % raw[:70])
+            exp += tokens(raw)
+            parts.append("<p>%s</p>" % inline(raw))
+    close()
+    title = labels["masthead"]
+    body = '<section id="masthead" epub:type="chapter">\n\t<h2 epub:type="title">%s</h2>\n%s\n</section>' % (
+        esc(title), ind("\n".join(parts), 1))
+    return page(title, "bodymatter", ind(body, 2)), exp
+
+
 def default_imprint(cfg, se, labels):
     prod = se["producer"]["name"]
     src = se.get("source_label") or "pindaian PDF"
@@ -408,6 +458,15 @@ def make_cover(bd, se, dest):
     im.save(dest, quality=90)
 
 
+MASTHEAD_CSS = '''
+p.masthead{
+\tfont-weight: bold;
+\tmargin: 1em auto;
+\ttext-align: center;
+\ttext-indent: 0;
+}
+'''
+
 ACR_CSS = '''
 abbr[epub|type~="z3998:acronym"]{
 \tfont-variant: all-small-caps;
@@ -517,10 +576,9 @@ def tokens(s):
     return re.findall(r"\w+", s.lower())
 
 
-def parity(chapters, front_epigraph, body_files, se):
+def parity(chapters, front_epigraph, body_files, se, extra_expected=()):
     """book.md chapter text vs generated XHTML: normalised word lists must be identical."""
-    qa = se.get("qa", False)
-    exp = []
+    exp = list(extra_expected)
     for title, eyebrow, blocks in chapters:
         for b in blocks:
             if b.kind != "image":
@@ -643,6 +701,11 @@ def build_se(bd, cfg):
 
     inline = Inline(se)
     images, body_files, words = [], [], 0
+    masthead_exp, masthead_file = [], None
+    if se.get("masthead", {}).get("enabled", True) and front:
+        mx, masthead_exp = masthead_page(front, se, inline, images, labels)
+        masthead_file = os.path.join(text_dir, "masthead.xhtml")
+        write(masthead_file, mx)
     for i, (title, eyebrow, blocks) in enumerate(chapters):
         cid, xhtml, sec = chapter_xhtml(cfg, se, inline, i, len(chapters), title, blocks, images, epigraph)
         write(os.path.join(text_dir, cid + ".xhtml"), xhtml)
@@ -676,7 +739,7 @@ def build_se(bd, cfg):
         % (labels["license"], paras_html(lic)), 2)))
 
     used_acr = any("z3998:acronym" in open(f, encoding="utf-8").read() for f in body_files)
-    css = (LOCAL_CSS if used_acr else LOCAL_CSS.replace(ACR_CSS, "")) + (QA_CSS if se.get("qa") else "") + (EPIGRAPH_CSS if epigraph else "") + (FIGURE_CSS if images else "")
+    css = (LOCAL_CSS if used_acr else LOCAL_CSS.replace(ACR_CSS, "")) + (QA_CSS if se.get("qa") else "") + (EPIGRAPH_CSS if epigraph else "") + (MASTHEAD_CSS if masthead_file else "") + (FIGURE_CSS if images else "")
     write(os.path.join(epub_dir, "css", "local.css"), css)
     se.setdefault("cover_title", se["title"])
     write(os.path.join(epub_dir, "content.opf"), opf(cfg, se, words, se["released"]))
@@ -696,11 +759,26 @@ def build_se(bd, cfg):
     # Ignore rules that do not match make `se lint` fail (m-048), so probe: write all, run lint, drop the unused ones.
     ignores = [("*.xhtml", "s-023", "Judul berbahasa Indonesia; kapitalisasi judul gaya Inggris dari `se titlecase` tidak berlaku."),
                ("content.opf", "m-056", "Edisi white-label, bukan rilis Standard Ebooks; tidak ada halaman penulis di standardebooks.org untuk ditautkan.")]
+    if masthead_file:
+        ignores += [("masthead.xhtml", "t-048", "Kalimat pembuka kotak keterangan dicetak dengan nama acara dalam huruf kapital di sumber; dipertahankan apa adanya."),
+                    ("masthead.xhtml", "y-003", "Baris alamat/kontak dicetak tanpa tanda baca akhir di sumber; dipertahankan apa adanya."),
+                    ("masthead.xhtml", "y-034", "Titik pada alamat web dan surel (perspektif.net) bukan singkatan.")]
     ignores += [(i["file"], i["code"], i["reason"]) for i in se.get("lint_ignore", [])]
     write_ignores(root, ignores)
 
     for cmd in ("build-manifest", "build-spine"):
         run_se(cmd, root)
+    if masthead_file:
+        # `se build-spine` sorts body files alphabetically; the source page comes before the text, so put it right after the imprint
+        opf_p = os.path.join(epub_dir, "content.opf")
+        x = open(opf_p, encoding="utf-8").read()
+        ref = re.search(r"[ \t]*<itemref idref=\"masthead\.xhtml\"/>\n", x)
+        anchor = re.search(r"<itemref idref=\"imprint\.xhtml\"/>\n", x)
+        if ref and anchor and ref.start() > anchor.end():
+            x = x.replace(ref.group(0), "")
+            at = x.index(anchor.group(0)) + len(anchor.group(0))
+            x = x[:at] + ref.group(0) + x[at:]
+            open(opf_p, "w", encoding="utf-8").write(x)
     for f in glob.glob(os.path.join(text_dir, "*.xhtml")):
         run_se("build-title", f, check=False)
     run_se("build-toc", root)
@@ -716,7 +794,7 @@ def build_se(bd, cfg):
         print(lint_out[:3000])
         ok = False
 
-    n_exp, n_got, diffs = parity(chapters, epigraph, body_files, se)
+    n_exp, n_got, diffs = parity(chapters, epigraph, ([masthead_file] if masthead_file else []) + body_files, se, masthead_exp)
     print("  word parity book.md vs body: %d vs %d tokens, %d differences" % (n_exp, n_got, len(diffs)))
     for d in diffs[:10]:
         print("    ", d)
