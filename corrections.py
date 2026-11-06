@@ -445,7 +445,7 @@ def render(led):
          "| ID | Hal. PDF | Alat | Jenis | Sebelum | Sesudah | Konteks | Saran SymSpell | Alasan | Dicatat |",
          "|---|---|---|---|---|---|---|---|---|---|"]
     for e in E:
-        sug = "; ".join("%s: %s" % kv for kv in (e.get("symspell_suggestions") or {}).items())
+        sug = "; ".join("%s: %s" % (w, v or "(tanpa saran)") for w, v in (e.get("symspell_suggestions") or {}).items())
         if e.get("before_in_dictionary") is True:
             sug = (sug + " " if sug else "") + "(kata ada di kamus KBBI/IndoLeX, tak terdeteksi alat)"
         pg = e.get("page")

@@ -231,3 +231,30 @@ Delete a file to fall back to the generated text. `se-src/` and `se-out/` are re
 
 Never invent `dc:source`, contacts, publisher names or licence choices: take them from the source or ask.
 
+## Correction ledger (`corrections.py`): OCR -> book.md lineage
+
+When `book.json` has `"source": "book.md"` you edit `book.md` by hand. Every such edit must be logged:
+
+    OCR pages  ocr/md/pNN.md
+       -> book.ocr-original.md   frozen baseline (sha256 pinned in the ledger; never edited)
+       -> book.md                 your source; the EPUB and the SE edition are built from it
+    corrections.json              one entry per edit (machine-readable)   corrections.md  readable table
+
+    python3 corrections.py init  <book_dir>     once, BEFORE the first edit: freezes the baseline, sets corrections.enforce
+    python3 corrections.py scan  <book_dir>     SymSpell candidates in the baseline + their decision (PENDING = none yet)
+    python3 corrections.py apply <book_dir> --find "..." --replace "..." --reason "..." [--tool symspell|manual]
+                                                edits book.md AND logs it in one step (preferred way to correct)
+    python3 corrections.py keep  <book_dir> --word W --reason "..."     candidate reviewed and deliberately left as printed
+    python3 corrections.py sync  <book_dir> [--reasons file.json]       log edits you already made in an editor
+    python3 corrections.py check <book_dir> --scan                       also run by `pipeline.py --steps verify`
+
+`verify` fails (exit 1) when: book.md differs from baseline + ledger (an unlogged edit), the baseline was touched, an entry
+has no reason, a SymSpell candidate has no decision (fixed or kept), or corrections.md is stale. Entries record: id, date,
+tool (symspell = the word was flagged by the checker; manual = it was not), kind, before/after, PDF page, context, the
+SymSpell suggestions, whether the word is in KBBI/IndoLeX (typos that are real words are invisible to SymSpell), reason,
+and whether the entry was written at edit time or reconstructed afterwards from backup files.
+
+Checker (once): `python3 tools/ocrcheck/build_merged_dict.py` (writes lexicon/, git-ignored) and
+`(cd tools/ocrcheck && cargo build --release)`. Without them `scan` stops and `verify` skips the completeness check only.
+Quote `--find` with enough context to be unique; `apply` refuses on 0 or several matches and writes nothing.
+
