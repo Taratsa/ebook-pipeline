@@ -137,7 +137,79 @@ class Inline:
         return s
 
 
+
+# ------------------------------------------------------------------ simple tables (raw-HTML fences in book.md)
+from html.parser import HTMLParser
+
+
+def html_fence_table(raw):
+    """book.md raw-HTML fence holding exactly one <table>: -> the table markup, else None."""
+    m = re.fullmatch(r"```\{=html\}\s*(<table\b.*</table>)\s*```", raw.strip(), re.S)
+    return m.group(1) if m else None
+
+
+class _TableParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.rows, self.cur, self.cell, self.sect = [], None, None, "tbody"
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag in ("thead", "tbody"):
+            self.sect = tag
+        elif tag == "tr":
+            self.cur = (self.sect, [])
+        elif tag in ("td", "th"):
+            keep = {k: v for k, v in a.items() if k in ("colspan", "rowspan") and (v or "").isdigit()}
+            self.cell = [tag, keep, ""]
+        elif tag not in ("table",):
+            fail("unsupported markup <%s> inside a table in book.md" % tag)
+
+    def handle_endtag(self, tag):
+        if tag in ("td", "th") and self.cell is not None and self.cur is not None:
+            self.cur[1].append(self.cell)
+            self.cell = None
+        elif tag == "tr" and self.cur is not None:
+            self.rows.append(self.cur)
+            self.cur = None
+
+    def handle_data(self, data):
+        if self.cell is not None:
+            self.cell[2] += data
+
+
+def table_html(raw):
+    """Render a simple book.md table as SE-style table markup. Cell text only (no inline markup); header-row cells -> <th>."""
+    p = _TableParser()
+    p.feed(raw)
+    if not p.rows:
+        fail("empty table in book.md")
+    out, sect = ["<table>"], None
+    for s, cells in p.rows:
+        if s != sect:
+            if sect:
+                out.append("\t</%s>" % sect)
+            out.append("\t<%s>" % s)
+            sect = s
+        out.append("\t\t<tr>")
+        for tag, attrs, text in cells:
+            t = "th" if s == "thead" else tag
+            at = "".join(' %s="%s"' % (k, v) for k, v in attrs.items())
+            out.append("\t\t\t<%s%s>%s</%s>" % (t, at, esc(typo(text)), t))
+        out.append("\t\t</tr>")
+    out += ["\t</%s>" % sect, "</table>"]
+    return "\n".join(out)
+
+
+def plain_line_ok(raw):
+    """Single-line paragraphs that merely start like markdown list markers ('3. memelihara ...', '* footnote') stay paragraphs:
+    the marker text is kept as printed, so nothing is dropped and word parity holds."""
+    return "\n" not in raw.strip() and bool(re.match(r"(\d+\.|\*) ", raw))
+
 # ------------------------------------------------------------------ book.md parsing
+USED_IDS = {}
+
+
 class Block:
     def __init__(self, kind, text, level=0):
         self.kind, self.text, self.level = kind, text, level
@@ -180,7 +252,12 @@ def parse_chapters(md, cfg, se):
                 mm = re.match(r"!\[[^\]]*\]\(([^)]+)\)", raw)
                 blocks.append(Block("image", mm.group(1) if mm else raw))
                 continue
-            if raw.startswith(("<", "|", "```", ":::")) or re.match(r"(?m)^([-*+] |\d+\. )", raw) or "\\\n" in raw:
+            tbl = html_fence_table(raw)
+            if tbl:
+                blocks.append(Block("table", tbl))
+                continue
+            if (raw.startswith(("<", "|", "```", ":::")) or (re.match(r"(?m)^([-*+] |\d+\. )", raw) and not plain_line_ok(raw))
+                    or "\\\n" in raw):
                 fail("unsupported construct in chapter %r (table/list/verse/raw HTML): %r. "
                      "Extend se_edition.py or simplify book.md." % (title, raw[:70]))
             if re.fullmatch(r"\d+ dari \d+ halaman", raw):  # scanner page footer
@@ -225,6 +302,11 @@ def chapter_xhtml(cfg, se, inline, idx, n_chapters, title, blocks, images, front
         if b.kind == "heading":
             close_to(b.level)
             hid = slugify(b.text)
+            if hid in USED_IDS:  # same heading text twice in the book (e.g. "Rekonstruksi"): ids must be unique across the book (x-017)
+                USED_IDS[hid] += 1
+                hid = "%s-%d" % (hid, USED_IDS[hid])
+            else:
+                USED_IDS[hid] = 1
             parts.append('<section id="%s" epub:type="z3998:subchapter">' % hid)
             parts.append('\t<h%d epub:type="title">%s</h%d>' % (b.level + 1, esc(typo(b.text)), b.level + 1))
             stack.append(b.level)
@@ -237,6 +319,8 @@ def chapter_xhtml(cfg, se, inline, idx, n_chapters, title, blocks, images, front
             images.append((src, "illustration-%d.jpg" % n))
             parts.append('<figure id="illustration-%d">\n\t<img alt="%s" src="../images/illustration-%d.jpg" epub:type="z3998:illustration"/>\n</figure>'
                          % (n, esc(alt), n))
+        elif b.kind == "table":
+            parts.append(table_html(b.text))
         elif b.kind == "question":
             parts.append('<p class="question">%s</p>' % inline(b.text))
         else:
@@ -294,8 +378,12 @@ def masthead_page(front, se, inline, images, labels):
             images.append((src, "illustration-%d.jpg" % n))
             parts.append('<figure id="illustration-%d">\n\t<img alt="%s" src="../images/illustration-%d.jpg" epub:type="z3998:illustration"/>\n</figure>'
                          % (n, esc(alt), n))
+        elif html_fence_table(raw):
+            close()
+            exp += tokens(html_fence_table(raw))
+            parts.append(table_html(html_fence_table(raw)))
         else:
-            if raw.startswith(("<", "|", "```", ":::")) or re.match(r"(?m)^([-*+] |\d+\. )", raw):
+            if raw.startswith(("<", "|", "```", ":::")) or (re.match(r"(?m)^([-*+] |\d+\. )", raw) and not plain_line_ok(raw)):
                 fail("unsupported construct in book.md front matter: %r" % raw[:70])
             exp += tokens(raw)
             parts.append("<p>%s</p>" % inline(raw))
@@ -572,6 +660,21 @@ section > header [epub|type~="epigraph"]{
 /* End epigraphs in section headers */
 '''
 
+TABLE_CSS = '''
+table{
+\tborder-collapse: collapse;
+\tmargin: 1em auto;
+\tmax-width: 100%;
+}
+
+td,
+th{
+\tborder: 1px solid;
+\tpadding: .25em .5em;
+\tvertical-align: top;
+}
+'''
+
 FIGURE_CSS = '''
 figure{
 \tbreak-inside: avoid;
@@ -741,6 +844,7 @@ def build_se(bd, cfg):
         os.remove(os.path.join(text_dir, f))
 
     inline = Inline(se)
+    USED_IDS.clear()
     images, body_files, words = [], [], 0
     masthead_exp, masthead_file = [], None
     if se.get("masthead", {}).get("enabled", True) and front:
@@ -780,8 +884,9 @@ def build_se(bd, cfg):
         '<section id="uncopyright" epub:type="copyright-page">\n\t<h2 epub:type="title">%s</h2>\n%s\n</section>'
         % (labels["license"], paras_html(lic)), 2)))
 
+    has_table = any(b.kind == "table" for _t, _e, bl in chapters for b in bl) or any(html_fence_table(r) for r in front)
     used_acr = any("z3998:acronym" in open(f, encoding="utf-8").read() for f in body_files)
-    css = (LOCAL_CSS if used_acr else LOCAL_CSS.replace(ACR_CSS, "")) + (QA_CSS if se.get("qa") else "") + (EPIGRAPH_CSS if epigraph else "") + (MASTHEAD_CSS if masthead_file else "") + (FIGURE_CSS if images else "")
+    css = (LOCAL_CSS if used_acr else LOCAL_CSS.replace(ACR_CSS, "")) + (QA_CSS if se.get("qa") else "") + (EPIGRAPH_CSS if epigraph else "") + (MASTHEAD_CSS if masthead_file and "class=\"masthead\"" in open(masthead_file, encoding="utf-8").read() else "") + (FIGURE_CSS if images else "") + (TABLE_CSS if has_table else "")
     write(os.path.join(epub_dir, "css", "local.css"), css)
     se.setdefault("cover_title", se["title"])
     write(os.path.join(epub_dir, "content.opf"), opf(cfg, se, words, se["released"]))
