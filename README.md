@@ -203,7 +203,10 @@ What `se_edition.py` does, and where it departs from stock SE (the `se` tool its
   page right after the imprint, in source order with its image. Headings listed in `se.masthead.sections` become
   sub-sections, the others are centred masthead lines; `se.masthead.enabled: false` drops the page. It is part of the
   word-parity check, so nothing from the front matter can silently go missing.
-- Cover: plain typographic 1400x2100 (League Spartan, shipped with `se`), or `se.cover_image`.
+- Cover: plain typographic 1400x2100 (League Spartan, shipped with `se`), or `se.cover_image`. This is a deliberate departure from the
+  SE cover guide (https://standardebooks.org/contribute/how-tos/how-to-choose-and-create-a-cover-image), which wants a colour oil painting that
+  is provably US public domain, approved by an SE editor, with the SE title block (`cover.svg`) added over it. Books built here have no such
+  artwork and are not SE releases, so `cover.svg` is dropped and the title/author are drawn into `cover.jpg`. Say so in `se.production_notes`.
 - `se-lint-ignore.xml` is generated; each rule carries a reason, and rules that match nothing are removed
   (`se lint` fails on unused ones).
 
