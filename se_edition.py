@@ -866,6 +866,26 @@ def epubcheck_all(epub):
     return ok
 
 
+def apply_metadata_file(se, meta):
+    """metadata.yaml (shared with the pandoc EPUB) overrides the matching book.json 'se' values."""
+    if not meta:
+        return
+    if meta.get("publisher"):
+        se["publisher"] = meta["publisher"] if isinstance(meta["publisher"], str) else ", ".join(meta["publisher"])
+    if meta.get("source"):
+        src = meta["source"] if isinstance(meta["source"], list) else [meta["source"]]
+        se["sources"] = [x for x in src if isinstance(x, str) and x]
+    if isinstance(meta.get("producer"), str) and meta["producer"]:
+        se["producer"] = {**se.get("producer", {}), "name": meta["producer"]}
+    if isinstance(meta.get("rights"), str) and meta["rights"]:
+        se["rights"] = meta["rights"]
+    for c in meta.get("creator") or []:
+        if isinstance(c, dict) and c.get("role", "aut") == "aut" and c.get("text"):
+            se["author"] = c["text"]
+            break
+    print("se: metadata.yaml overrides: " + ", ".join(k for k in ("publisher", "source", "producer", "creator", "rights") if meta.get(k)))
+
+
 # ------------------------------------------------------------------ main entry
 def build_se(bd, cfg):
     se = cfg.get("se")
@@ -875,6 +895,7 @@ def build_se(bd, cfg):
     if lang not in LABELS:
         fail("only lang=id labels are defined; add LABELS[%r]" % lang)
     labels = {**LABELS[lang], **se.get("labels", {})}
+    apply_metadata_file(se, cfg.get("_metadata") or {})
     for k in ("author", "publisher", "producer", "subjects", "abstract", "description_html", "rights"):
         if not se.get(k):
             fail("book.json se.%s is required" % k)

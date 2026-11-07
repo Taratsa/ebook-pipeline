@@ -79,7 +79,7 @@ Files in the book folder, all optional; each one overrides what the build would 
 
 | File | Controls | Fallback if absent |
 |---|---|---|
-| `metadata.yaml` | OPF metadata: title, creator(s), contributor(s), publisher, subjects, description, rights, source, date, pinned `identifier`, `lang` | values derived from book.json |
+| `metadata.yaml` | OPF metadata of **both** EPUBs: title, creator(s), contributor(s), publisher, subjects, description, rights, source, date, pinned `identifier`, `lang`. The Standard Ebooks edition (`--steps se`) reads `publisher`, `source`, `producer` (dc:contributor, role bkp), `creator` (aut) and `rights` from it; its title, subtitle, abstract and subjects stay in book.json `se` | values derived from book.json |
 | `titlepage.html` | body of the title page (below the title) | author line |
 | `colophon.html` | the Kolofon page | generated from book.json `finish` |
 | `license.html` | the license page text | generated from `finish.license` |
@@ -91,7 +91,7 @@ as in the MasasilaM editions). `publisher` must be a single string: a YAML list 
 `<dc:publisher>`, so join several with ", ".
 
 Start `metadata.yaml` from the current values with `pipeline.py <book> --export-metadata` (never
-overwrites an existing file). Keys set there override book.json, and the title and author on the
+overwrites an existing file; it pins the identifier of the EPUB built last, so the book keeps its identity). Keys set there override book.json, and the title and author on the
 title page follow them. Pin `identifier` so readers keep reading position across rebuilds; set `date`
 to the edition date, otherwise the build timestamp is used. File names can be changed with
 `metadata_file` / `titlepage_file` / `colophon_file` / `license_file`.

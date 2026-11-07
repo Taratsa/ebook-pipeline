@@ -36,7 +36,7 @@ Layout written inside <book_dir>:
 
 Everything book-specific lives in book.json. The code below is book-independent.
 """
-import argparse, base64, collections, html, io, json, os, re, subprocess, sys, time, zipfile
+import argparse, base64, collections, glob, html, io, json, os, re, subprocess, sys, time, zipfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 LOG = []                 # audit trail of join decisions (written to review.txt)
@@ -633,8 +633,41 @@ def metadata_overrides(bd, cfg):
     return out
 
 
+def read_metadata(bd, cfg):
+    """metadata.yaml as plain python: str, [str] or [{role,text}] per key (parsed by pandoc, no PyYAML). {} if absent."""
+    name = cfg.get("metadata_file", "metadata.yaml")
+    if not os.path.exists(os.path.join(bd, name)):
+        return {}
+    r = subprocess.run(["pandoc", "-f", "markdown", "-t", "json", "--metadata-file", name],
+                       cwd=bd, input="", capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"{name}: invalid YAML for pandoc:\n{r.stderr[:800]}")
+    def val(n):
+        if n.get("t") == "MetaList":
+            return [val(x) for x in n["c"]]
+        if n.get("t") == "MetaMap":
+            return {k: _plain(v).strip() for k, v in n["c"].items()}
+        return _plain(n).strip()
+    return {k: val(v) for k, v in json.loads(r.stdout).get("meta", {}).items()}
+
+
 def _yq(v):
     return json.dumps(v, ensure_ascii=False)      # JSON scalars are valid YAML
+
+
+def _current_identifier(bd, cfg):
+    """dc:identifier of the EPUB built last (so pinning it does not change the book's identity)."""
+    f = os.path.join(bd, cfg.get("epub_name", "") + ".epub") if cfg.get("epub_name") else None
+    for cand in ([f] if f else []) + [x for x in glob.glob(os.path.join(bd, "*.epub")) if "(SE)" not in x]:
+        try:
+            with zipfile.ZipFile(cand) as z:
+                opf = next(n for n in z.namelist() if n.endswith("content.opf"))
+                m = re.search(r'<dc:identifier[^>]*>([^<]+)</dc:identifier>', z.read(opf).decode("utf-8"))
+                if m and m.group(1).startswith("urn:uuid:"):
+                    return m.group(1)
+        except (OSError, StopIteration, KeyError, zipfile.BadZipFile):
+            continue
+    return None
 
 
 def export_metadata(bd, cfg):
@@ -653,7 +686,7 @@ def export_metadata(bd, cfg):
          "",
          "# Pinned so readers keep reading position/annotations across rebuilds (a new random one is made",
          "# on every build otherwise). Do not change after publishing.",
-         f"identifier: {_yq('urn:uuid:' + str(uuid.uuid4()))}",
+         f"identifier: {_yq(_current_identifier(bd, cfg) or 'urn:uuid:' + str(uuid.uuid4()))}",
          "# Publication date of this edition (YYYY-MM-DD); without it the build timestamp is used.",
          "# date: 2026-01-01", "",
          "# OPF-only keys (injected after the build; pandoc has no field for them), as in the MasasilaM editions:",
@@ -661,10 +694,15 @@ def export_metadata(bd, cfg):
          "#   first-published -> <meta property=\"schema:firstPublished\">  year of first publication",
          "# first-publisher: \"\"",
          "# first-published: \"\"",
-         "# publisher must be ONE string (a YAML list makes pandoc write an empty <dc:publisher>); join several with \", \".", ""]
+         "# publisher and source must be ONE string for the pandoc EPUB (a YAML list makes pandoc write an empty element);",
+         "# join several publishers with \", \". The Standard Ebooks edition also accepts a list for source (one dc:source each).", ""]
     for k in ("title", "lang", "publisher", "rights", "source", "description"):
         if m.get(k):
             L.append(f"{k}: {_yq(m[k])}")
+    pr = (cfg.get("se") or {}).get("producer", {}).get("name")
+    L += ["", "# Standard Ebooks edition (--steps se) reads the same file: publisher, source (one or a list), creator (aut),",
+          "# producer (dc:contributor, role bkp). Title/subtitle/abstract/subjects of the SE edition stay in book.json 'se'.",
+          f"producer: {_yq(pr)}" if pr else "# producer: \"\"", ""]
     for k in ("creator", "contributor"):
         if m.get(k):
             L.append(f"{k}:")
@@ -842,16 +880,17 @@ def build_epub(bd, cfg):
     if cfg.get("finish"):
         return build_epub_finished(bd, cfg, cfg["finish"])
     epub = os.path.join(bd, cfg["epub_name"])
+    hand = read_metadata(bd, cfg)      # pandoc: --metadata beats --metadata-file, so flags are skipped for keys set in metadata.yaml
     cmd = ["pandoc", "book.md", "-o", epub, "--from", "markdown+pipe_tables", "--to", "epub3",
            "--epub-cover-image=" + cover_path(cfg),
-           "--metadata", f"title={cfg['title']}",
-           *(["--metadata", f"author={cfg['author']}"] if cfg.get("author") else []),
-           "--metadata", f"lang={cfg['lang']}",
+           *([] if "title" in hand else ["--metadata", f"title={cfg['title']}"]),
+           *(["--metadata", f"author={cfg['author']}"] if cfg.get("author") and "creator" not in hand and "author" not in hand else []),
+           *([] if "lang" in hand else ["--metadata", f"lang={cfg['lang']}"]),
            "--split-level=1", "--resource-path=.", "--toc", "--toc-depth=1"]
     for key in ("publisher", "date", "description", "subject"):   # optional, from book.json
-        if cfg.get(key):
+        if cfg.get(key) and key not in hand:
             cmd += ["--metadata", f"{key}={cfg[key]}"]
-    if cfg.get("source_url"):                                       # dc:source (pandoc 'source' metadata)
+    if cfg.get("source_url") and "source" not in hand:             # dc:source (pandoc 'source' metadata)
         cmd += ["--metadata", f"source={cfg['source_url']}"]
     cmd += metadata_file_args(bd, cfg)
     r = subprocess.run(cmd, cwd=bd, capture_output=True, text=True)
@@ -1003,6 +1042,7 @@ def main():
         ok = verify(bd, cfg, n) and ok
     if "se" in steps:
         import se_edition   # only needed for this step; keeps `se`/cairo optional for everyone else
+        cfg["_metadata"] = read_metadata(bd, cfg)
         ok = se_edition.build_se(bd, cfg) and ok
     sys.exit(0 if ok else 1)
 
