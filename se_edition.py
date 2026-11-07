@@ -918,6 +918,8 @@ def build_se(bd, cfg):
         shutil.rmtree(os.path.join(bd, "se-src"))
     os.makedirs(os.path.join(bd, "se-src"))
     run_se("create-draft", "--offline", "-a", se["author"], "-t", se["title"], cwd=os.path.join(bd, "se-src"))
+    # create-draft makes an empty nested git repo; the build never uses it and it would stop the book's own repo from tracking se-src/
+    shutil.rmtree(os.path.join(root, ".git"), ignore_errors=True)
     for f in ("src/epub/images/logo.svg", "src/epub/images/cover.svg", "src/epub/images/titlepage.svg"):
         if os.path.exists(os.path.join(root, f)):
             os.remove(os.path.join(root, f))
