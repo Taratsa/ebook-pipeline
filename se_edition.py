@@ -39,6 +39,7 @@ LABELS = {
         "colophon": "Kolofon",
         "license": "Lisensi",
         "masthead": "Halaman Sumber",
+        "endnotes": "Catatan",
         "by": "Oleh",
     },
 }
@@ -134,7 +135,8 @@ class Inline:
                            '<i xml:lang="%s">%s</i>' % (lang, w), s)
         for n in self.italic_names:
             s = s.replace(n["text"], '<i epub:type="%s">%s</i>' % (n.get("type", "se:name.publication.book"), n["text"]))
-        return s
+        return NOTE_PH_RE.sub(lambda m: '<a href="endnotes.xhtml#note-%s" id="noteref-%s" epub:type="noteref">%s</a>'
+                              % (m.group(1), m.group(1), m.group(1)), s)
 
 
 
@@ -206,6 +208,77 @@ def plain_line_ok(raw):
     the marker text is kept as printed, so nothing is dropped and word parity holds."""
     return "\n" not in raw.strip() and bool(re.match(r"(\d+\.|\*) ", raw))
 
+
+# ------------------------------------------------------------------ endnotes (book.md: pandoc-style markers + "## Catatan" blocks)
+NOTEREF_RE = re.compile(r'\[([^\]]*)\]\(#n-([a-z0-9-]+)\)\{#r-[a-z0-9-]+ epub:type="noteref"\}')
+NOTE_RE = re.compile(r"\[(.+?)\]\{#n-([a-z0-9-]+)\} (.*)$", re.S)
+BACKLINK_RE = re.compile(r' \[\u21a9\]\(#r-[a-z0-9-]+\)\{epub:type="backlink"\}$')
+NOTE_PH = "\ue000%d\ue001"
+NOTE_PH_RE = re.compile("\ue000(\\d+)\ue001")
+
+
+def unesc_md(t):
+    return t.replace("\\[", "[").replace("\\]", "]").replace("\\*", "*")
+
+
+def note_block(raw):
+    """book.md note paragraph -> Block('endnote' | 'unlinked') or None."""
+    m = NOTE_RE.match(raw)
+    if not m:
+        return None
+    label, nid, body = m.groups()
+    mb = BACKLINK_RE.search(body)
+    if mb:
+        b = Block("endnote", unesc_md(body[:mb.start()]))
+    else:
+        label = unesc_md(label)
+        b = Block("unlinked", ("" if label in ("\u2013", "-") else label + " ") + unesc_md(body))
+    b.nid = nid
+    return b
+
+
+def prepare_notes(chapters, work):
+    """SE endnotes: numbered in order of appearance in the text, one endnotes file, markers after punctuation (SE manual).
+    -> (chapters without the endnote blocks, [(number, text, chapter file)])"""
+    order = []
+    for ci, (_t, _e, bl) in enumerate(chapters):
+        for b in bl:
+            if b.kind in ("p", "question"):
+                for m in NOTEREF_RE.finditer(b.text):
+                    order.append((m.group(2), ci))
+    ids = [i for i, _ in order]
+    if len(set(ids)) != len(ids):
+        fail("a note marker occurs twice in book.md: %s" % sorted({i for i in ids if ids.count(i) > 1}))
+    num = {nid: n + 1 for n, (nid, _ci) in enumerate(order)}
+    home = {nid: ("chapter-%d" % (ci + 1) if len(chapters) > 1 else work) + ".xhtml" for nid, ci in order}
+    have, out_ch = {}, []
+    for t, e, bl in chapters:
+        keep = []
+        for b in bl:
+            if b.kind == "endnote":
+                have[b.nid] = b
+                continue
+            if b.kind in ("p", "question") and NOTEREF_RE.search(b.text):
+                x = NOTEREF_RE.sub(lambda m: NOTE_PH % num[m.group(2)], b.text)
+                b.text = re.sub("(\ue000\\d+\ue001)([.,;:?!])", r"\2\1", x)   # marker goes after the punctuation
+            keep.append(b)
+        out_ch.append((t, e, keep))
+    if set(have) != set(num):
+        fail("endnote markers and notes do not pair up: markers without note %s, notes without marker %s"
+             % (sorted(set(num) - set(have)), sorted(set(have) - set(num))))
+    notes = sorted((num[nid], have[nid].text, home[nid]) for nid in have)
+    return out_ch, notes
+
+
+def endnotes_xhtml(notes, inline, title):
+    items = []
+    for n, text, home in notes:
+        items.append('<li id="note-%d">\n\t<p>%s <a href="%s#noteref-%d" epub:type="backlink">\u21a9</a></p>\n</li>'
+                     % (n, inline(text), home, n))
+    sec = ('<section id="endnotes" epub:type="endnotes">\n\t<h2 epub:type="title">%s</h2>\n\t<ol>\n%s\n\t</ol>\n</section>'
+           % (esc(title), ind("\n".join(items), 2)))
+    return page(title, "backmatter", ind(sec, 2))
+
 # ------------------------------------------------------------------ book.md parsing
 USED_IDS = {}
 
@@ -243,6 +316,8 @@ def parse_chapters(md, cfg, se):
             m = re.match(r"(#{2,6}) +(.+)$", raw, re.S)
             if m:
                 text = m.group(2).strip()
+                if text == "Catatan":   # replaced by the book's endnotes page (linked notes) / "Catatan tanpa penanda"
+                    continue
                 if qa and text.endswith("?"):  # OCR promoted a question to a heading
                     blocks.append(Block("question", text))
                 else:
@@ -251,6 +326,10 @@ def parse_chapters(md, cfg, se):
             if re.fullmatch(r"!\[[^\]]*\]\(([^)]+)\)(\{[^}]*\})?", raw):
                 mm = re.match(r"!\[[^\]]*\]\(([^)]+)\)", raw)
                 blocks.append(Block("image", mm.group(1) if mm else raw))
+                continue
+            nb = note_block(raw)
+            if nb:
+                blocks.append(nb)
                 continue
             tbl = html_fence_table(raw)
             if tbl:
@@ -321,6 +400,8 @@ def chapter_xhtml(cfg, se, inline, idx, n_chapters, title, blocks, images, front
                          % (n, esc(alt), n))
         elif b.kind == "table":
             parts.append(table_html(b.text))
+        elif b.kind == "unlinked":
+            parts.append("<p>%s</p>" % inline(b.text))
         elif b.kind == "question":
             parts.append('<p class="question">%s</p>' % inline(b.text))
         else:
@@ -809,6 +890,7 @@ def build_se(bd, cfg):
     if not chapters:
         fail("no chapters found in book.md")
     chapters = [(t, e, join_split_paragraphs(bl)) for t, e, bl in chapters]
+    chapters, endnotes = prepare_notes(chapters, se.setdefault("work", slugify(se.get("title") or cfg["title"])))
 
     epigraph = None
     if se.get("epigraph"):
@@ -856,6 +938,10 @@ def build_se(bd, cfg):
         write(os.path.join(text_dir, cid + ".xhtml"), xhtml)
         body_files.append(os.path.join(text_dir, cid + ".xhtml"))
         words += len(re.sub(r"<[^>]+>", " ", sec).split())
+    endnotes_file = None
+    if endnotes:
+        endnotes_file = os.path.join(text_dir, "endnotes.xhtml")
+        write(endnotes_file, endnotes_xhtml(endnotes, inline, labels["endnotes"]))
     se["has_images"] = bool(images)
     if images:
         from PIL import Image
@@ -910,6 +996,8 @@ def build_se(bd, cfg):
         ignores += [("masthead.xhtml", "t-048", "Kalimat pembuka kotak keterangan dicetak dengan nama acara dalam huruf kapital di sumber; dipertahankan apa adanya."),
                     ("masthead.xhtml", "y-003", "Baris alamat/kontak dicetak tanpa tanda baca akhir di sumber; dipertahankan apa adanya."),
                     ("masthead.xhtml", "y-034", "Titik pada alamat web dan surel (perspektif.net) bukan singkatan.")]
+    if endnotes:
+        ignores.append(("endnotes.xhtml", "m-033", "Catatan akhir berasal dari catatan kaki yang tercetak di naskah sumber, bukan anotasi oleh pembuat edisi digital."))
     ignores += [(i["file"], i["code"], i["reason"]) for i in se.get("lint_ignore", [])]
     write_ignores(root, ignores)
 
@@ -941,7 +1029,18 @@ def build_se(bd, cfg):
         print(lint_out[:3000])
         ok = False
 
+    # notes are listed on the endnotes page in order of first reference, so they are compared as their own ordered list
     n_exp, n_got, diffs = parity(chapters, epigraph, ([masthead_file] if masthead_file else []) + body_files, se, masthead_exp)
+    if endnotes_file:
+        note_exp = [t for _n, text, _h in endnotes for t in tokens(text)]
+        x = open(endnotes_file, encoding="utf-8").read()
+        x = re.sub(r"<title>.*?</title>|<h2 epub:type=\"title\">.*?</h2>", "", x, flags=re.S)
+        x = x.replace("\u21a9", " ")
+        note_got = tokens(x)
+        import difflib
+        nd = [(op, note_exp[i1:i2], note_got[j1:j2]) for op, i1, i2, j1, j2 in
+              difflib.SequenceMatcher(None, note_exp, note_got, autojunk=False).get_opcodes() if op != "equal"]
+        n_exp, n_got, diffs = n_exp + len(note_exp), n_got + len(note_got), diffs + nd
     print("  word parity book.md vs body: %d vs %d tokens, %d differences" % (n_exp, n_got, len(diffs)))
     for d in diffs[:10]:
         print("    ", d)
