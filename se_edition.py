@@ -164,6 +164,8 @@ class _TableParser(HTMLParser):
         elif tag in ("td", "th"):
             keep = {k: v for k, v in a.items() if k in ("colspan", "rowspan") and (v or "").isdigit()}
             self.cell = [tag, keep, ""]
+        elif tag == "br" and self.cell is not None:
+            self.cell[2] += "\u2028"        # line break inside a cell: the numbered items of one table cell
         elif tag not in ("table",):
             fail("unsupported markup <%s> inside a table in book.md" % tag)
 
@@ -197,7 +199,9 @@ def table_html(raw):
         for tag, attrs, text in cells:
             t = "th" if s == "thead" else tag
             at = "".join(' %s="%s"' % (k, v) for k, v in attrs.items())
-            out.append("\t\t\t<%s%s>%s</%s>" % (t, at, esc(typo(text)), t))
+            if t == "th":   # SE 5.7.2.2 / accessible tables: say which cells a header applies to
+                at += ' scope="%s"' % ("colgroup" if int(attrs.get("colspan", 1)) > 1 else "col")
+            out.append("\t\t\t<%s%s>%s</%s>" % (t, at, "<br/>".join(esc(typo(x.strip())) for x in text.split("\u2028")), t))
         out.append("\t\t</tr>")
     out += ["\t</%s>" % sect, "</table>"]
     return "\n".join(out)
