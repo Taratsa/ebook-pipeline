@@ -851,6 +851,8 @@ def build_epub(bd, cfg):
     for key in ("publisher", "date", "description", "subject"):   # optional, from book.json
         if cfg.get(key):
             cmd += ["--metadata", f"{key}={cfg[key]}"]
+    if cfg.get("source_url"):                                       # dc:source (pandoc 'source' metadata)
+        cmd += ["--metadata", f"source={cfg['source_url']}"]
     cmd += metadata_file_args(bd, cfg)
     r = subprocess.run(cmd, cwd=bd, capture_output=True, text=True)
     if r.returncode != 0 or "PandocResourceNotFound" in r.stderr:
