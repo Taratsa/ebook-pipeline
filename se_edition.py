@@ -76,6 +76,12 @@ def slugify(s):
     return s or "section"
 
 
+def section_id(s):
+    """slugify() for an XML id: an id may not start with a digit (x-007), e.g. a numbered heading '2. Mahkamah Internasional'."""
+    s = slugify(s)
+    return "section-" + s if s[0].isdigit() else s
+
+
 def se_env():
     env = dict(os.environ)
     lib = "/opt/homebrew/lib"
@@ -384,7 +390,7 @@ def chapter_xhtml(cfg, se, inline, idx, n_chapters, title, blocks, images, front
     for b in blocks:
         if b.kind == "heading":
             close_to(b.level)
-            hid = slugify(b.text)
+            hid = section_id(b.text)
             if hid in USED_IDS:  # same heading text twice in the book (e.g. "Rekonstruksi"): ids must be unique across the book (x-017)
                 USED_IDS[hid] += 1
                 hid = "%s-%d" % (hid, USED_IDS[hid])
@@ -447,7 +453,7 @@ def masthead_page(front, se, inline, images, labels):
             exp += tokens(text)
             if text in sections:
                 close()
-                parts.append('<section id="%s" epub:type="z3998:subchapter">' % slugify(text))
+                parts.append('<section id="%s" epub:type="z3998:subchapter">' % section_id(text))
                 parts.append('\t<h3 epub:type="title">%s</h3>' % esc(typo(text)))
                 in_sec = True
             else:
