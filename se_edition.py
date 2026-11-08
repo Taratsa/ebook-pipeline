@@ -344,7 +344,7 @@ def parse_chapters(md, cfg, se):
             lm = None
             if "\n" not in raw.strip():   # single-line list items; consecutive ones form one list
                 if re.match(r"- \S", raw):
-                    lm = (False, raw[2:].strip())
+                    lm = (False, re.sub(r"^(\w)\\\. ", r"\1. ", raw[2:].strip()))   # "a\. x": markdown escape that keeps pandoc from reading "a." as a list marker
                 elif se.get("ordered_lists") and re.match(r"\d+\. \S", raw):   # opt-in: other books keep '3. ...' as paragraphs
                     lm = (True, raw.split(". ", 1)[1].strip())
             if lm:
