@@ -341,6 +341,21 @@ def parse_chapters(md, cfg, se):
             if nb:
                 blocks.append(nb)
                 continue
+            lm = None
+            if "\n" not in raw.strip():   # single-line list items; consecutive ones form one list
+                if re.match(r"- \S", raw):
+                    lm = (False, raw[2:].strip())
+                elif se.get("ordered_lists") and re.match(r"\d+\. \S", raw):   # opt-in: other books keep '3. ...' as paragraphs
+                    lm = (True, raw.split(". ", 1)[1].strip())
+            if lm:
+                if blocks and blocks[-1].kind == "list" and blocks[-1].ordered == lm[0]:
+                    blocks[-1].items.append(lm[1])
+                else:
+                    lb = Block("list", "")
+                    lb.ordered, lb.items = lm[0], [lm[1]]
+                    blocks.append(lb)
+                blocks[-1].text = "\n".join(blocks[-1].items)   # the list marker is not text: parity counts item words only
+                continue
             tbl = html_fence_table(raw)
             if tbl:
                 blocks.append(Block("table", tbl))
@@ -374,6 +389,37 @@ def page(title, body_type, inner, css=("core.css", "local.css"), lang="id"):
     links = "".join('\n\t\t<link href="../css/%s" rel="stylesheet" type="text/css"/>' % c for c in css)
     return ('<?xml version="1.0" encoding="utf-8"?>\n%s\n\t<head>\n\t\t<title>%s</title>%s\n\t</head>\n'
             '\t<body epub:type="%s">\n%s\n\t</body>\n</html>\n') % (NS % lang, esc(title), links, body_type, inner)
+
+
+def closing_part(text, se):
+    """se.closing = {"signature": "Munir", "dateline": "Jakarta, 19 April 1999", "time_text": "19 April 1999", "datetime": "1999-04-19"}.
+    SE has no pattern for the sign-off of an article; the letter footer pattern (manual 7.8: z3998:sender z3998:signature,
+    se:letter.dateline with a <time>) is the closest. Returns the <p> for a paragraph that is exactly the signature or the dateline."""
+    c = se.get("closing")
+    if not c:
+        return None
+    if text.strip() == c.get("signature"):
+        return '<p epub:type="z3998:sender z3998:signature">%s</p>' % esc(text.strip())
+    if text.strip() == c.get("dateline"):
+        tt = c["time_text"]
+        assert tt in text, "se.closing.time_text %r not in dateline" % tt
+        pre, post = text.strip().split(tt, 1)
+        return '<p epub:type="se:letter.dateline">%s<time datetime="%s">%s</time>%s</p>' % (esc(pre), c["datetime"], esc(tt), esc(post))
+    return None
+
+
+def wrap_closing(parts):
+    res, i = [], 0
+    while i < len(parts):
+        if parts[i].startswith(('<p epub:type="z3998:sender', '<p epub:type="se:letter.dateline')):
+            j = i
+            while j < len(parts) and parts[j].startswith(('<p epub:type="z3998:sender', '<p epub:type="se:letter.dateline')):
+                j += 1
+            res.append("<footer>\n%s\n</footer>" % "\n".join("\t" + x for x in parts[i:j]))
+            i = j
+        else:
+            res.append(parts[i]); i += 1
+    return res
 
 
 def chapter_xhtml(cfg, se, inline, idx, n_chapters, title, blocks, images, front_epigraph):
@@ -410,6 +456,11 @@ def chapter_xhtml(cfg, se, inline, idx, n_chapters, title, blocks, images, front
                          % (n, esc(alt), n))
         elif b.kind == "table":
             parts.append(table_html(b.text))
+        elif b.kind == "list":
+            tag = "ol" if b.ordered else "ul"
+            parts.append("<%s>\n%s\n</%s>" % (tag, "\n".join("\t<li>\n\t\t<p>%s</p>\n\t</li>" % inline(i) for i in b.items), tag))
+        elif b.kind == "p" and closing_part(b.text, se):
+            parts.append(closing_part(b.text, se))
         elif b.kind == "unlinked":
             parts.append("<p>%s</p>" % inline(b.text))
         elif b.kind == "question":
@@ -417,6 +468,8 @@ def chapter_xhtml(cfg, se, inline, idx, n_chapters, title, blocks, images, front
         else:
             parts.append("<p>%s</p>" % inline(b.text))
     close_to(0)
+    # closing signature / dateline (se.closing): consecutive signature+dateline paragraphs go in one <footer>
+    parts = wrap_closing(parts)
 
     sub = se.get("subtitle") if single else None
     if single:
@@ -766,6 +819,22 @@ th{
 }
 '''
 
+FOOTER_CSS = '''
+/* Sign-off of an article: letter footer pattern (manual 7.8) */
+footer{
+\tmargin-top: 1em;
+\ttext-align: right;
+}
+
+footer p{
+\ttext-indent: 0;
+}
+
+[epub|type~="z3998:signature"]{
+\tfont-variant: small-caps;
+}
+'''
+
 FIGURE_CSS = '''
 figure{
 \tbreak-inside: avoid;
@@ -1005,7 +1074,7 @@ def build_se(bd, cfg):
 
     has_table = any(b.kind == "table" for _t, _e, bl in chapters for b in bl) or any(html_fence_table(r) for r in front)
     used_acr = any("z3998:acronym" in open(f, encoding="utf-8").read() for f in body_files)
-    css = (LOCAL_CSS if used_acr else LOCAL_CSS.replace(ACR_CSS, "")) + (QA_CSS if se.get("qa") else "") + (EPIGRAPH_CSS if epigraph else "") + (MASTHEAD_CSS if masthead_file and "class=\"masthead\"" in open(masthead_file, encoding="utf-8").read() else "") + (FIGURE_CSS if images else "") + (TABLE_CSS if has_table else "")
+    css = (LOCAL_CSS if used_acr else LOCAL_CSS.replace(ACR_CSS, "")) + (QA_CSS if se.get("qa") else "") + (EPIGRAPH_CSS if epigraph else "") + (MASTHEAD_CSS if masthead_file and "class=\"masthead\"" in open(masthead_file, encoding="utf-8").read() else "") + (FIGURE_CSS if images else "") + (FOOTER_CSS if se.get("closing") else "") + (TABLE_CSS if has_table else "")
     write(os.path.join(epub_dir, "css", "local.css"), css)
     se.setdefault("cover_title", se["title"])
     write(os.path.join(epub_dir, "content.opf"), opf(cfg, se, words, se["released"]))
