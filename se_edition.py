@@ -663,7 +663,8 @@ def opf(cfg, se, words, now):
     for i, (label, term) in enumerate(se["subjects"], 1):
         L.append('\t\t<dc:subject id="subject-%d">%s</dc:subject>' % (i, esc(label)))
     for i, (label, term) in enumerate(se["subjects"], 1):
-        L += [meta("authority", "LCSH", "subject-%d" % i), meta("term", term, "subject-%d" % i)]
+        if term:   # term null = free-text subject (e.g. a date of writing), no LCSH authority
+            L += [meta("authority", "LCSH", "subject-%d" % i), meta("term", term, "subject-%d" % i)]
     L += [meta("schema:genre", se.get("genre", "Nonfiction")), meta("schema:abstract", se["abstract"]),
           "\t\t<dc:description>\n\t\t\t%s\n\t\t</dc:description>" % se["description_html"],
           "\t\t<dc:language>%s</dc:language>" % cfg.get("lang", "id")]
