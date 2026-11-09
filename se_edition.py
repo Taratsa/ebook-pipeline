@@ -815,6 +815,7 @@ table{
 td,
 th{
 \tborder: 1px solid;
+\tfont-variant-numeric: tabular-nums;
 \tpadding: .25em .5em;
 \tvertical-align: top;
 }
@@ -1073,9 +1074,10 @@ def build_se(bd, cfg):
         '<section id="uncopyright" epub:type="copyright-page">\n\t<h2 epub:type="title">%s</h2>\n%s\n</section>'
         % (labels["license"], paras_html(lic)), 2)))
 
+    has_th = any(b.kind == "table" and "<th" in str(getattr(b, "data", getattr(b, "text", ""))) for _t, _e, bl in chapters for b in bl)
     has_table = any(b.kind == "table" for _t, _e, bl in chapters for b in bl) or any(html_fence_table(r) for r in front)
     used_acr = any("z3998:acronym" in open(f, encoding="utf-8").read() for f in body_files)
-    css = (LOCAL_CSS if used_acr else LOCAL_CSS.replace(ACR_CSS, "")) + (QA_CSS if se.get("qa") else "") + (EPIGRAPH_CSS if epigraph else "") + (MASTHEAD_CSS if masthead_file and "class=\"masthead\"" in open(masthead_file, encoding="utf-8").read() else "") + (FIGURE_CSS if images else "") + (FOOTER_CSS if se.get("closing") else "") + (TABLE_CSS if has_table else "")
+    css = (LOCAL_CSS if used_acr else LOCAL_CSS.replace(ACR_CSS, "")) + (QA_CSS if se.get("qa") else "") + (EPIGRAPH_CSS if epigraph else "") + (MASTHEAD_CSS if masthead_file and "class=\"masthead\"" in open(masthead_file, encoding="utf-8").read() else "") + (FIGURE_CSS if images else "") + (FOOTER_CSS if se.get("closing") else "") + ((TABLE_CSS if has_th else TABLE_CSS.replace("td,\nth{", "td{")) if has_table else "")
     write(os.path.join(epub_dir, "css", "local.css"), css)
     se.setdefault("cover_title", se["title"])
     write(os.path.join(epub_dir, "content.opf"), opf(cfg, se, words, se["released"]))

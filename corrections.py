@@ -270,6 +270,14 @@ def cmd_init(a):
     print("created %s; book.json corrections.enforce=true" % LEDGER)
 
 
+def gone_from_book(bd, words):
+    """Flagged baseline tokens that no longer occur in book.md. check() already proves book.md == baseline + ledger,
+    so such a token was changed by a logged edit even when that edit's 'before' field holds only its first changed word
+    (apply --count N records one token pair)."""
+    have = {w.lower() for w in alpha_tokens(rd(paths(bd)["md"]))}
+    return {w: "edit" for w in words if w not in have}
+
+
 def decisions(led):
     fixed, kept = {}, {}
     for e in led["entries"]:
@@ -297,6 +305,8 @@ def cmd_scan(a):
     if fl is None:
         die("SymSpell checker not ready: (cd tools/ocrcheck && cargo build --release) and python3 tools/ocrcheck/build_merged_dict.py")
     fixed, kept = decisions(led)
+    for w, how in gone_from_book(bd, fl).items():
+        fixed.setdefault(w, how)
     pend = 0
     print("%d SymSpell candidates in %s" % (len(fl), "current book.md" if a.current else led["baseline"]["file"]))
     for w, s in sorted(fl.items()):
@@ -394,6 +404,8 @@ def check(bd, scan=False):
             print("corrections: SymSpell checker not built; scan completeness not checked")
         else:
             fixed, kept = decisions(led)
+            for w, how in gone_from_book(bd, fl).items():
+                fixed.setdefault(w, how)
             pend = sorted(w for w in fl if w not in fixed and w not in kept)
             if pend:
                 problems.append("SymSpell candidates with no logged decision: %s (corrections.py scan <book_dir>)" % ", ".join(pend))

@@ -136,7 +136,7 @@ def page_count(bd):
     d = os.path.join(bd, "ocr", "md")
     if not os.path.isdir(d):
         sys.exit("no ocr/md yet; run the ocr step first")
-    n = len([f for f in os.listdir(d) if re.fullmatch(r"p\d{2}\.md", f)])
+    n = len([f for f in os.listdir(d) if re.fullmatch(r"p\d{2,}\.md", f)])
     missing = [p for p in range(n) if not os.path.exists(md_path(bd, p))]
     if missing:
         sys.exit(f"OCR incomplete, missing pages: {missing[:10]}")
