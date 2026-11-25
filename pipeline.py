@@ -174,7 +174,7 @@ def ocr(bd, cfg, pages_arg, force):
         text, err = None, ""
         for attempt in range(1, oc["retries"] + 1):
             r = subprocess.run(["curl", "-s", "-m", str(oc["timeout_s"]), "-X", "POST",
-                                "-F", f"file=@{tmp}", url], capture_output=True, text=True)
+                                "-F", f'file=@"{tmp}"', url], capture_output=True, text=True)
             body = r.stdout
             # TurboOCR returns JSON only on error; success is markdown text
             if r.returncode == 0 and not body.lstrip().startswith("{"):
